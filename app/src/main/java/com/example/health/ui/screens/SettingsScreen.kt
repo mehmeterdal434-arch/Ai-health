@@ -14,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -32,6 +33,7 @@ fun SettingsScreen(
     onUpdateProfile: (UserHealthProfile) -> Unit,
     onUpdateApiKey: (String) -> Unit,
     onRequestPermissions: () -> Unit,
+    onSyncNow: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -47,7 +49,8 @@ fun SettingsScreen(
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = 16.dp)
+            .testTag("settings_screen"),
         verticalArrangement = Arrangement.spacedBy(16.dp),
         contentPadding = PaddingValues(top = 16.dp, bottom = 24.dp)
     ) {
@@ -61,7 +64,7 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.primary
                 )
                 Text(
-                    text = "Samsung Health, Health Connect ve Kural Eşikleri",
+                    text = "Samsung Health, Health Connect ve Kişisel Hedefler",
                     fontSize = 13.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -97,7 +100,7 @@ fun SettingsScreen(
             }
         }
 
-        // Samsung Health & Health Connect Card
+        // Samsung Health & Health Connect Live Card
         item {
             Card(
                 shape = RoundedCornerShape(20.dp),
@@ -108,20 +111,37 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Filled.Sync,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(22.dp)
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = "Samsung Health / Health Connect",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Filled.Sync,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                text = "Samsung Health / Health Connect",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+
+                        FilledTonalButton(
+                            onClick = {
+                                onSyncNow()
+                                saveSuccessMessage = "Veriler eşitlendi."
+                            },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("Eşitle", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))
@@ -132,7 +152,7 @@ fun SettingsScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Health Connect Durumu", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface)
+                        Text("Health Connect Platformu", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface)
                         val hcStatus = when (uiState.healthConnectAvailability) {
                             HealthConnectAvailability.INSTALLED -> "Kurulu ve Hazır"
                             HealthConnectAvailability.NOT_INSTALLED -> "Yüklü Değil"
@@ -148,9 +168,27 @@ fun SettingsScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Veri İzinleri", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface)
+                        Text("Samsung Health Durumu", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface)
                         Text(
-                            if (uiState.permissionState.allGranted) "Tam Yetki Verildi" else "Kısmi İzin",
+                            if (uiState.isSamsungHealthInstalled) "Cihazda Yüklü" else "Yüklü Değil",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (uiState.isSamsungHealthInstalled) StatusGoodGreen else StatusAttentionYellow
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Okuma İzinleri", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface)
+                        Text(
+                            if (uiState.permissionState.allGranted) "Tam Yetki Verildi"
+                            else if (uiState.permissionState.anyGranted) "Kısmi İzin Verildi"
+                            else "İzin Bekleniyor",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             color = if (uiState.permissionState.allGranted) StatusGoodGreen else StatusAttentionYellow
@@ -164,14 +202,11 @@ fun SettingsScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Button(
-                            onClick = {
-                                onRequestPermissions()
-                                saveSuccessMessage = "Health Connect izinleri başarıyla güncellendi."
-                            },
+                            onClick = { onRequestPermissions() },
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier.weight(1f)
                         ) {
-                            Text("İzinleri Onayla", fontSize = 12.sp)
+                            Text("İzinleri İste / Onayla", fontSize = 12.sp)
                         }
 
                         OutlinedButton(
@@ -193,6 +228,28 @@ fun SettingsScreen(
                             modifier = Modifier.weight(1f)
                         ) {
                             Text("Sistem Ayarları", fontSize = 12.sp)
+                        }
+                    }
+
+                    if (uiState.isSamsungHealthInstalled) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = {
+                                try {
+                                    val launchIntent = context.packageManager.getLaunchIntentForPackage("com.sec.android.app.shealth")
+                                    if (launchIntent != null) {
+                                        context.startActivity(launchIntent)
+                                    }
+                                } catch (e: Exception) {
+                                    // ignore
+                                }
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.Launch, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Samsung Health'i Aç", fontSize = 12.sp)
                         }
                     }
                 }
@@ -228,7 +285,7 @@ fun SettingsScreen(
 
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Kural motoru hesaplamalarında referans alınacak kişisel değerlerinizi özelleştirin.",
+                        text = "Klinik kural motorunun kişisel sağlık skorunuzu hesaplarken baz alacağı hedefleri belirleyin.",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -303,7 +360,7 @@ fun SettingsScreen(
             }
         }
 
-        // Gemini API Key Management Card
+        // Gemini AI API Configuration Card
         item {
             Card(
                 shape = RoundedCornerShape(20.dp),
@@ -323,7 +380,7 @@ fun SettingsScreen(
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
-                            text = "Gemini API Anahtarı Yönetimi",
+                            text = "Gemini API Yapılandırması",
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface
@@ -332,7 +389,7 @@ fun SettingsScreen(
 
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Doğal dilde AI açıklamaları için Gemini API anahtarı kullanılır. Anahtar girilmezse kural motoru yerel offline açıklayıcı ile çalışır.",
+                        text = "Sağlık asistanı açıklamaları Gemini 2.5 Flash modeli ile üretilmektedir. Özel bir anahtarınız varsa buradan girebilirsiniz.",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -342,13 +399,13 @@ fun SettingsScreen(
                     OutlinedTextField(
                         value = apiKeyText,
                         onValueChange = { apiKeyText = it },
-                        label = { Text("Gemini API Key") },
+                        label = { Text("Gemini API Anahtarı") },
                         visualTransformation = if (showApiKey) VisualTransformation.None else PasswordVisualTransformation(),
                         trailingIcon = {
                             IconButton(onClick = { showApiKey = !showApiKey }) {
                                 Icon(
-                                    imageVector = if (showApiKey) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                                    contentDescription = null
+                                    imageVector = if (showApiKey) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = if (showApiKey) "Gizle" else "Göster"
                                 )
                             }
                         },
@@ -356,12 +413,12 @@ fun SettingsScreen(
                         modifier = Modifier.fillMaxWidth()
                     )
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
                     Button(
                         onClick = {
-                            onUpdateApiKey(apiKeyText)
-                            saveSuccessMessage = "API Anahtarı başarıyla kaydedildi."
+                            onUpdateApiKey(apiKeyText.trim())
+                            saveSuccessMessage = "Gemini API Anahtarı kaydedildi."
                         },
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth()
@@ -372,55 +429,7 @@ fun SettingsScreen(
             }
         }
 
-        // Step-by-Step Test Guide Card
-        item {
-            Card(
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
-                ),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Outlined.HelpOutline,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(22.dp)
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = "Nasıl Test Edilir?",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    val steps = listOf(
-                        "1. Ana ekrandaki senaryo butonlarına (Sporcu, Uykusuz, Kritik) basarak kural motorunun farklı eşiklerdeki tepkisini anında görün.",
-                        "2. Herhangi bir metrik kartına (Adım, Nabız, Uyku vb.) tıklayarak 7 günlük geçmiş trend grafiğini ve kural motoru eşik analizini inceleyin.",
-                        "3. 'AI Günlük Özeti' sekmesinden Gemini AI'ın tüm kural kategorilerini sentezlediği genel sağlık raporunu okuyun.",
-                        "4. 'Kritik Sağlık Uyarısı' senaryosunu seçerek tehlikeli eşiklerdeki otomatik hekim yönlendirme uyarısını test edin."
-                    )
-
-                    steps.forEach { stepText ->
-                        Text(
-                            text = stepText,
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            lineHeight = 17.sp,
-                            modifier = Modifier.padding(vertical = 3.dp)
-                        )
-                    }
-                }
-            }
-        }
-
-        // Medical Disclaimer
+        // Disclaimer
         item {
             MedicalDisclaimerCard()
         }

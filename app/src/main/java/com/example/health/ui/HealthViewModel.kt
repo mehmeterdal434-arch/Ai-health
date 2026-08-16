@@ -8,19 +8,24 @@ import com.example.health.data.HealthConnectAvailability
 import com.example.health.data.HealthConnectManager
 import com.example.health.data.HealthDataRepository
 import com.example.health.data.HealthPermissionState
-import com.example.health.data.HealthScenario
 import com.example.health.data.local.AppDatabase
 import com.example.health.engine.RuleEngine
 import com.example.health.engine.UserHealthProfile
 import com.example.health.model.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 data class HealthUiState(
     val currentRecord: DailyHealthRecord? = null,
     val summary: StructuredHealthSummary? = null,
     val profile: UserHealthProfile = UserHealthProfile(),
     val isAiGenerating: Boolean = false,
+    val isSyncing: Boolean = false,
+    val lastSyncTime: String = "Henüz eşitlenmedi",
+    val syncErrorMessage: String? = null,
     val fullDayAiInsight: AiGeneratedInsight? = null,
     val metricAiInsights: Map<MetricType, AiGeneratedInsight> = emptyMap(),
     val historicalTrend: List<HistoricalTrendPoint> = emptyList(),
@@ -28,14 +33,13 @@ data class HealthUiState(
     val healthConnectAvailability: HealthConnectAvailability = HealthConnectAvailability.INSTALLED,
     val permissionState: HealthPermissionState = HealthPermissionState(),
     val isSamsungHealthInstalled: Boolean = true,
-    val currentScenario: HealthScenario = HealthScenario.BALANCED_HEALTHY,
     val customApiKey: String = "",
     val activeTab: Int = 0, // 0: Dashboard, 1: Detail, 2: AI Coach/Summary, 3: Guide, 4: Settings
     val waterIntakeMl: Int = 1600,
     val waterGoalMl: Int = 2500,
     val chatMessages: List<ChatMessage> = listOf(
         ChatMessage(
-            text = "Merhaba! Ben senin Samsung Health AI Sağlık Asistanınım. 🩺 Güncel verilerin ve kural motoru analizlerin ışığında uyku, nabız, antrenman veya toparlanma durumun hakkında merak ettiğin her şeyi sorabilirsin.",
+            text = "Merhaba! Ben senin Samsung Health AI Sağlık Asistanınım. 🩺 Canlı Samsung Health & Health Connect verilerin ve klinik kural motorumuz ışığında uyku, nabız, antrenman veya toparlanma durumun hakkında merak ettiğin her şeyi sorabilirsin.",
             isUser = false
         )
     ),
@@ -46,9 +50,11 @@ data class HealthUiState(
 class HealthViewModel(application: Application) : AndroidViewModel(application) {
 
     private val db = AppDatabase.getDatabase(application)
-    private val healthConnectManager = HealthConnectManager(application)
+    val healthConnectManager = HealthConnectManager(application)
     val repository = HealthDataRepository(db.healthDao(), healthConnectManager)
     val geminiExplainer = GeminiExplainer(application)
+
+    private val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
 
     private val _uiState = MutableStateFlow(HealthUiState())
     val uiState: StateFlow<HealthUiState> = _uiState.asStateFlow()
@@ -57,40 +63,63 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
         loadInitialData()
     }
 
-    private fun loadInitialData() {
+    fun loadInitialData() {
         viewModelScope.launch {
-            // Check health connect availability
+            // Check health connect availability & permissions
             val availability = healthConnectManager.checkHealthConnectAvailability()
             val isSamsungInstalled = healthConnectManager.isSamsungHealthInstalled()
+            val permState = healthConnectManager.getPermissionState()
             val currentApiKey = geminiExplainer.getEffectiveApiKey()
 
             _uiState.update {
                 it.copy(
                     healthConnectAvailability = availability,
                     isSamsungHealthInstalled = isSamsungInstalled,
+                    permissionState = permState,
                     customApiKey = currentApiKey
                 )
             }
 
-            // Seed mock history if needed
-            repository.seedMockHistoryIfEmpty(_uiState.value.profile)
+            // Sync or Load today's record
+            syncHealthData()
+        }
+    }
 
-            // Load today's record
-            val record = repository.getTodayRecord()
-            val summary = RuleEngine.evaluateAll(record, _uiState.value.profile)
+    fun syncHealthData() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isSyncing = true, syncErrorMessage = null) }
+            try {
+                // Refresh permission status
+                val permState = healthConnectManager.getPermissionState()
+                
+                // Fetch real data
+                val record = repository.syncWithHealthConnect(_uiState.value.profile) ?: repository.getTodayRecord()
+                val summary = RuleEngine.evaluateAll(record, _uiState.value.profile)
+                val syncTime = timeFormat.format(Date())
 
-            _uiState.update {
-                it.copy(
-                    currentRecord = record,
-                    summary = summary
-                )
+                _uiState.update {
+                    it.copy(
+                        currentRecord = record,
+                        summary = summary,
+                        permissionState = permState,
+                        isSyncing = false,
+                        lastSyncTime = syncTime
+                    )
+                }
+
+                // Refresh trend for active metric
+                loadTrendForMetric(_uiState.value.selectedMetricForDetail)
+
+                // Generate AI insight based on real live data
+                generateFullDayAiInsight(summary, forceRefresh = false)
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        isSyncing = false,
+                        syncErrorMessage = "Senkronizasyon hatası: ${e.localizedMessage}"
+                    )
+                }
             }
-
-            // Load trend for default selected metric
-            loadTrendForMetric(_uiState.value.selectedMetricForDetail)
-
-            // Generate or load AI insight for today
-            generateFullDayAiInsight(summary, forceRefresh = false)
         }
     }
 
@@ -142,15 +171,15 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
 
     fun generateShareableHealthReport(): String {
         val summary = _uiState.value.summary ?: return "Henüz sağlık verisi bulunmamaktadır."
-        val record = _uiState.value.currentRecord
         val aiInsight = _uiState.value.fullDayAiInsight
 
         return buildString {
             appendLine("📋 SAMSUNG HEALTH & AI KLİNİK ÖZET RAPORU")
             appendLine("📅 Tarih: ${summary.date}")
+            appendLine("🔄 Son Senkronizasyon: ${_uiState.value.lastSyncTime}")
             appendLine("📊 Genel Hazırlık Skoru: %${summary.overallScore} (${summary.overallStatus.tag})")
             appendLine("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-            appendLine("📈 GÜNLÜK METRİK DETAYLARI:")
+            appendLine("📈 GÜNCEL METRİK DETAYLARI (Canlı Veri):")
             summary.evaluations.forEach { (type, eval) ->
                 appendLine("• ${type.displayName}: ${eval.formattedValue}")
                 appendLine("  Durum: ${eval.category.label} (${eval.statusLevel.tag}) | Ref: ${eval.normalRange}")
@@ -182,25 +211,6 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
             repository.getHistoricalTrend(metricType).collectLatest { trendList ->
                 _uiState.update { it.copy(historicalTrend = trendList) }
             }
-        }
-    }
-
-    fun applyScenario(scenario: HealthScenario) {
-        viewModelScope.launch {
-            val updatedRecord = repository.applyScenario(scenario, _uiState.value.profile)
-            val summary = RuleEngine.evaluateAll(updatedRecord, _uiState.value.profile)
-
-            _uiState.update {
-                it.copy(
-                    currentRecord = updatedRecord,
-                    summary = summary,
-                    currentScenario = scenario
-                )
-            }
-
-            loadTrendForMetric(_uiState.value.selectedMetricForDetail)
-            generateFullDayAiInsight(summary, forceRefresh = true)
-            generateMetricAiInsight(_uiState.value.selectedMetricForDetail, forceRefresh = true)
         }
     }
 
@@ -248,17 +258,13 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
         _uiState.update { it.copy(customApiKey = key) }
     }
 
-    fun requestPermissions() {
-        _uiState.update {
-            it.copy(
-                permissionState = HealthPermissionState(
-                    stepsGranted = true,
-                    heartRateGranted = true,
-                    sleepGranted = true,
-                    spO2Granted = true,
-                    caloriesGranted = true
-                )
-            )
+    fun refreshPermissionsState() {
+        viewModelScope.launch {
+            val permState = healthConnectManager.getPermissionState()
+            _uiState.update { it.copy(permissionState = permState) }
+            if (permState.anyGranted) {
+                syncHealthData()
+            }
         }
     }
 }

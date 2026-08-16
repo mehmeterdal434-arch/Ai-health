@@ -1,5 +1,6 @@
 package com.example.health.data
 
+import android.util.Log
 import com.example.health.data.local.AiInsightEntity
 import com.example.health.data.local.HealthDao
 import com.example.health.data.local.HealthRecordEntity
@@ -9,30 +10,9 @@ import com.example.health.model.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import java.text.SimpleDateFormat
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 import java.util.*
-
-enum class HealthScenario(val title: String, val description: String) {
-    BALANCED_HEALTHY(
-        "Dengeli ve Sağlıklı Gün",
-        "İdeal adım, mükemmel 7.8 saat uyku, 64 bpm dinlenik nabız, %98 SpO2 ve düşük stres."
-    ),
-    ATHLETE_RECOVERY(
-        "Sporcu & Yüksek Aktivite",
-        "14,800 adım, 8.2 saat uyku, 52 bpm düşük dinlenik nabız, 850 kcal aktif kalori."
-    ),
-    TIRED_LOW_SLEEP(
-        "Yorgun & Uykusuz Gün",
-        "3,100 adım, 4.8 saat yetersiz uyku (ortalama altı), 78 bpm nabız, 65 orta stres."
-    ),
-    HIGH_STRESS_WORK(
-        "Yoğun & Yüksek Stres",
-        "5,200 adım, 5.5 saat uyku, 88 bpm yükselmiş nabız, 84 yüksek stres yükü."
-    ),
-    CRITICAL_ALERT_TEST(
-        "Kritik Sağlık Uyarısı (Tıbbi Test)",
-        "Düşük SpO2 (%88 Hipoksemi) ve Düşük Nabız (38 bpm) - Doğrudan doktor başvuru alarmı tetikler."
-    )
-}
 
 class HealthDataRepository(
     private val healthDao: HealthDao,
@@ -50,15 +30,61 @@ class HealthDataRepository(
         entities.map { it.toDomain() }
     }
 
+    /**
+     * Attempts to read live synchronized data from Health Connect (Samsung Health) for today and the past 7 days.
+     */
+    suspend fun syncWithHealthConnect(profile: UserHealthProfile = UserHealthProfile()): DailyHealthRecord? {
+        val today = LocalDate.now()
+        val todayStr = today.format(DateTimeFormatter.ISO_LOCAL_DATE)
+
+        // 1. Fetch today's live data
+        val liveTodayRecord = healthConnectManager.fetchRealHealthData(today)
+        if (liveTodayRecord != null) {
+            saveRecord(liveTodayRecord, profile)
+        }
+
+        // 2. Fetch past 6 days history if missing or to update
+        for (i in 1..6) {
+            val pastDate = today.minusDays(i.toLong())
+            val pastDateStr = pastDate.format(DateTimeFormatter.ISO_LOCAL_DATE)
+            val pastRecord = healthConnectManager.fetchRealHealthData(pastDate)
+            if (pastRecord != null && (pastRecord.steps > 0 || pastRecord.sleepHours > 0 || pastRecord.restingHeartRate > 0)) {
+                saveRecord(pastRecord, profile)
+            }
+        }
+
+        return liveTodayRecord ?: getTodayRecord()
+    }
+
     suspend fun getTodayRecord(): DailyHealthRecord {
         val todayStr = getTodayDateString()
         val entity = healthDao.getRecordByDate(todayStr)
         return if (entity != null) {
             entity.toDomain()
         } else {
-            val defaultRecord = generateScenarioRecord(HealthScenario.BALANCED_HEALTHY, todayStr)
-            saveRecord(defaultRecord)
-            defaultRecord
+            // Check Health Connect directly first
+            val live = healthConnectManager.fetchRealHealthData(LocalDate.now())
+            if (live != null) {
+                saveRecord(live)
+                live
+            } else {
+                // Initialize clean empty record for today
+                val blankRecord = DailyHealthRecord(
+                    date = todayStr,
+                    timestamp = System.currentTimeMillis(),
+                    steps = 0,
+                    restingHeartRate = 0,
+                    minHeartRate = 0,
+                    maxHeartRate = 0,
+                    sleepHours = 0.0,
+                    deepSleepPercent = 0,
+                    spO2Percent = 0,
+                    stressScore = 0,
+                    activeCaloriesKcal = 0
+                )
+                saveRecord(blankRecord)
+                blankRecord
+            }
         }
     }
 
@@ -80,67 +106,6 @@ class HealthDataRepository(
             overallStatus = summary.overallStatus.tag
         )
         healthDao.insertOrUpdateDailyRecord(entity)
-    }
-
-    suspend fun applyScenario(scenario: HealthScenario, profile: UserHealthProfile = UserHealthProfile()): DailyHealthRecord {
-        val todayStr = getTodayDateString()
-        val record = generateScenarioRecord(scenario, todayStr)
-        saveRecord(record, profile)
-        return record
-    }
-
-    suspend fun seedMockHistoryIfEmpty(profile: UserHealthProfile = UserHealthProfile()) {
-        val today = Calendar.getInstance()
-        val list = mutableListOf<HealthRecordEntity>()
-
-        for (i in 6 downTo 1) {
-            val cal = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -i) }
-            val dateStr = dateFormat.format(cal.time)
-            val existing = healthDao.getRecordByDate(dateStr)
-            if (existing == null) {
-                val mockSteps = (6000..11000).random()
-                val mockSleep = (6.0 + (0..25).random() / 10.0)
-                val mockHr = (58..74).random()
-                val mockSpO2 = (96..99).random()
-                val mockStress = (15..55).random()
-                val mockCal = (380..650).random()
-
-                val rec = DailyHealthRecord(
-                    date = dateStr,
-                    timestamp = cal.timeInMillis,
-                    steps = mockSteps,
-                    restingHeartRate = mockHr,
-                    minHeartRate = mockHr - 10,
-                    maxHeartRate = mockHr + 45,
-                    sleepHours = mockSleep,
-                    deepSleepPercent = (15..28).random(),
-                    spO2Percent = mockSpO2,
-                    stressScore = mockStress,
-                    activeCaloriesKcal = mockCal
-                )
-                val summary = RuleEngine.evaluateAll(rec, profile)
-                list.add(
-                    HealthRecordEntity(
-                        date = rec.date,
-                        timestamp = rec.timestamp,
-                        steps = rec.steps,
-                        restingHeartRate = rec.restingHeartRate,
-                        minHeartRate = rec.minHeartRate,
-                        maxHeartRate = rec.maxHeartRate,
-                        sleepHours = rec.sleepHours,
-                        deepSleepPercent = rec.deepSleepPercent,
-                        spO2Percent = rec.spO2Percent,
-                        stressScore = rec.stressScore,
-                        activeCaloriesKcal = rec.activeCaloriesKcal,
-                        overallScore = summary.overallScore,
-                        overallStatus = summary.overallStatus.tag
-                    )
-                )
-            }
-        }
-        if (list.isNotEmpty()) {
-            healthDao.insertDailyRecords(list)
-        }
     }
 
     fun getHistoricalTrend(metricType: MetricType): Flow<List<HistoricalTrendPoint>> {
@@ -214,71 +179,6 @@ class HealthDataRepository(
             healthDao.getLatestDayInsight(date).map { it?.toDomain() }
         } else {
             healthDao.getLatestMetricInsight(date, metricType.name).map { it?.toDomain() }
-        }
-    }
-
-    private fun generateScenarioRecord(scenario: HealthScenario, dateStr: String): DailyHealthRecord {
-        return when (scenario) {
-            HealthScenario.BALANCED_HEALTHY -> DailyHealthRecord(
-                date = dateStr,
-                steps = 8640,
-                restingHeartRate = 64,
-                minHeartRate = 56,
-                maxHeartRate = 118,
-                sleepHours = 7.8,
-                deepSleepPercent = 24,
-                spO2Percent = 98,
-                stressScore = 22,
-                activeCaloriesKcal = 540
-            )
-            HealthScenario.ATHLETE_RECOVERY -> DailyHealthRecord(
-                date = dateStr,
-                steps = 14850,
-                restingHeartRate = 52,
-                minHeartRate = 48,
-                maxHeartRate = 165,
-                sleepHours = 8.2,
-                deepSleepPercent = 30,
-                spO2Percent = 99,
-                stressScore = 18,
-                activeCaloriesKcal = 850
-            )
-            HealthScenario.TIRED_LOW_SLEEP -> DailyHealthRecord(
-                date = dateStr,
-                steps = 3200,
-                restingHeartRate = 78,
-                minHeartRate = 66,
-                maxHeartRate = 125,
-                sleepHours = 4.8,
-                deepSleepPercent = 12,
-                spO2Percent = 96,
-                stressScore = 65,
-                activeCaloriesKcal = 280
-            )
-            HealthScenario.HIGH_STRESS_WORK -> DailyHealthRecord(
-                date = dateStr,
-                steps = 5200,
-                restingHeartRate = 88,
-                minHeartRate = 72,
-                maxHeartRate = 135,
-                sleepHours = 5.5,
-                deepSleepPercent = 14,
-                spO2Percent = 95,
-                stressScore = 84,
-                activeCaloriesKcal = 390
-            )
-            HealthScenario.CRITICAL_ALERT_TEST -> DailyHealthRecord(
-                date = dateStr,
-                steps = 1200,
-                restingHeartRate = 38, // Bradycardia critical alarm
-                minHeartRate = 34,
-                maxHeartRate = 95,
-                sleepHours = 4.1,
-                deepSleepPercent = 8,
-                spO2Percent = 88, // Hypoxemia critical alarm
-                stressScore = 92,
-                activeCaloriesKcal = 160
-            )
         }
     }
 

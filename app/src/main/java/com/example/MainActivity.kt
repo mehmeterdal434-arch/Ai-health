@@ -2,6 +2,7 @@ package com.example
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
@@ -17,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.health.connect.client.PermissionController
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.health.ui.HealthViewModel
 import com.example.health.ui.screens.*
@@ -32,6 +34,26 @@ class MainActivity : ComponentActivity() {
         setContent {
             HealthAITheme {
                 val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+
+                // Health Connect permission launcher contract
+                val requestPermissionLauncher = rememberLauncherForActivityResult(
+                    contract = PermissionController.createRequestPermissionResultContract()
+                ) { grantedPermissions ->
+                    viewModel.refreshPermissionsState()
+                }
+
+                fun launchHealthConnectPermissions() {
+                    try {
+                        requestPermissionLauncher.launch(viewModel.healthConnectManager.requiredPermissions)
+                    } catch (e: Exception) {
+                        try {
+                            val intent = viewModel.healthConnectManager.getHealthConnectSettingsIntent()
+                            startActivity(intent)
+                        } catch (e2: Exception) {
+                            startActivity(viewModel.healthConnectManager.getPlayStoreIntentForHealthConnect())
+                        }
+                    }
+                }
 
                 Scaffold(
                     modifier = Modifier
@@ -116,7 +138,8 @@ class MainActivity : ComponentActivity() {
                             0 -> HealthDashboardScreen(
                                 uiState = uiState,
                                 onSelectMetric = { viewModel.selectMetricForDetail(it) },
-                                onApplyScenario = { viewModel.applyScenario(it) },
+                                onSyncLiveHealthData = { viewModel.syncHealthData() },
+                                onRequestPermissions = { launchHealthConnectPermissions() },
                                 onNavigateToAiSummary = { viewModel.selectTab(2) },
                                 onNavigateToGuide = { viewModel.selectTab(3) },
                                 onNavigateToSettings = { viewModel.selectTab(4) },
@@ -148,7 +171,8 @@ class MainActivity : ComponentActivity() {
                                 uiState = uiState,
                                 onUpdateProfile = { viewModel.updateProfile(it) },
                                 onUpdateApiKey = { viewModel.updateCustomApiKey(it) },
-                                onRequestPermissions = { viewModel.requestPermissions() }
+                                onRequestPermissions = { launchHealthConnectPermissions() },
+                                onSyncNow = { viewModel.syncHealthData() }
                             )
                         }
 
@@ -166,5 +190,10 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        viewModel.refreshPermissionsState()
     }
 }

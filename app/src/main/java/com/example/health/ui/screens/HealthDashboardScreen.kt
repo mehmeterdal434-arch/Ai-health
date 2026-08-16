@@ -2,35 +2,30 @@ package com.example.health.ui.screens
 
 import android.content.Intent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.Image
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.R
-import com.example.health.data.HealthScenario
+import com.example.health.data.HealthConnectAvailability
 import com.example.health.model.MetricType
 import com.example.health.ui.HealthUiState
 import com.example.health.ui.components.*
@@ -40,7 +35,8 @@ import com.example.ui.theme.*
 fun HealthDashboardScreen(
     uiState: HealthUiState,
     onSelectMetric: (MetricType) -> Unit,
-    onApplyScenario: (HealthScenario) -> Unit,
+    onSyncLiveHealthData: () -> Unit,
+    onRequestPermissions: () -> Unit,
     onNavigateToAiSummary: () -> Unit,
     onNavigateToGuide: () -> Unit,
     onNavigateToSettings: () -> Unit,
@@ -52,6 +48,18 @@ fun HealthDashboardScreen(
     val context = LocalContext.current
     val summary = uiState.summary
 
+    // Rotation animation for sync icon when syncing
+    val infiniteTransition = rememberInfiniteTransition(label = "sync_rotation")
+    val rotationAngle by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "sync_angle"
+    )
+
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
@@ -60,7 +68,7 @@ fun HealthDashboardScreen(
         verticalArrangement = Arrangement.spacedBy(16.dp),
         contentPadding = PaddingValues(top = 16.dp, bottom = 24.dp)
     ) {
-        // Header & Status
+        // Top App Bar & Live Sync Status
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -75,34 +83,103 @@ fun HealthDashboardScreen(
                         color = MaterialTheme.colorScheme.primary
                     )
                     Text(
-                        text = "Klinik Kural Motoru + Akıllı Açıklayıcı",
+                        text = "Canlı Samsung Health & Health Connect Entegrasyonu",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
 
-                Surface(
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.clickable { onNavigateToSettings() }
+                // Sync button
+                FilledTonalButton(
+                    onClick = { onSyncLiveHealthData() },
+                    shape = RoundedCornerShape(14.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                    modifier = Modifier.testTag("btn_sync_health")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Sync,
+                        contentDescription = "Eşitle",
+                        modifier = Modifier
+                            .size(16.dp)
+                            .rotate(if (uiState.isSyncing) rotationAngle else 0f)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (uiState.isSyncing) "Eşitleniyor..." else "Şimdi Eşitle",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+
+        // Health Connect & Permission Live Banner
+        item {
+            Card(
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (uiState.permissionState.anyGranted)
+                        MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.4f)
+                    else
+                        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f)
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
                     ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Sync,
-                            contentDescription = "Senkronize",
-                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = "Health Connect",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
+                        Box(
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (uiState.permissionState.anyGranted) StatusGoodGreen.copy(alpha = 0.15f)
+                                    else MaterialTheme.colorScheme.error.copy(alpha = 0.15f)
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = if (uiState.permissionState.anyGranted) Icons.Default.CheckCircle else Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = if (uiState.permissionState.anyGranted) StatusGoodGreen else MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = if (uiState.permissionState.allGranted) "Samsung Health Bağlantısı Aktif"
+                                else if (uiState.permissionState.anyGranted) "Health Connect Kısmi İzinli"
+                                else "Health Connect İzni Gerekli",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Son Eşitleme: ${uiState.lastSyncTime}",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    if (!uiState.permissionState.allGranted) {
+                        Button(
+                            onClick = { onRequestPermissions() },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.testTag("btn_grant_permissions")
+                        ) {
+                            Text("İzin Ver", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             }
@@ -157,44 +234,6 @@ fun HealthDashboardScreen(
             }
         }
 
-        // Scenario Selector Chips
-        item {
-            Column {
-                Text(
-                    text = "Kural Motoru Test Senaryosu:",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    HealthScenario.values().forEach { scenario ->
-                        val isSelected = scenario == uiState.currentScenario
-                        FilterChip(
-                            selected = isSelected,
-                            onClick = { onApplyScenario(scenario) },
-                            label = {
-                                Text(
-                                    text = scenario.title,
-                                    fontSize = 12.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                                )
-                            },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = MaterialTheme.colorScheme.primary,
-                                selectedLabelColor = MaterialTheme.colorScheme.onPrimary
-                            )
-                        )
-                    }
-                }
-            }
-        }
-
         // Critical Alerts Banner if any
         if (summary != null && summary.hasCriticalConditions) {
             item {
@@ -232,7 +271,7 @@ fun HealthDashboardScreen(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "GÜNLÜK SAĞLIK SKORU",
+                                    text = "CANLI GÜNLÜK SAĞLIK SKORU",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
                                     letterSpacing = 1.sp,
@@ -249,7 +288,7 @@ fun HealthDashboardScreen(
                                 StatusBadge(status = summary.overallStatus)
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Text(
-                                    text = "Kural motoru tüm parametreleri referans aralıklarına göre denetledi.",
+                                    text = "Samsung Health'ten aktarılan gerçek biyometrik verilerin klinik analizi.",
                                     fontSize = 12.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     lineHeight = 16.sp
@@ -387,7 +426,7 @@ fun HealthDashboardScreen(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "Gemini AI Günlük Değerlendirmesi",
+                                text = "Gemini AI Günlük Analizi",
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurface
@@ -414,7 +453,7 @@ fun HealthDashboardScreen(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "Kural motoru çıktısı yapay zeka ile çevriliyor...",
+                                text = "Canlı sağlık verileri analiz ediliyor...",
                                 fontSize = 12.sp,
                                 color = MaterialTheme.colorScheme.primary
                             )
@@ -435,12 +474,23 @@ fun HealthDashboardScreen(
 
         // Section Title for Metrics
         item {
-            Text(
-                text = "Günün Sağlık Metrikleri (Detay için dokunun)",
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Canlı Sağlık Metrikleri",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = "Detay ve Trend İçin Dokunun",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
 
         // 6 Metric Cards
