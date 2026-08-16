@@ -13,28 +13,31 @@ jobs:
     - name: Checkout Source Code
       uses: actions/checkout@v4
 
-    - name: Set up JDK 17
+    - name: Set up JDK 21
       uses: actions/setup-java@v4
       with:
-        java-version: '17'
+        java-version: '21'
         distribution: 'temurin'
+        cache: gradle
 
     - name: Set up Android SDK
       uses: android-actions/setup-android@v3
 
+    - name: Accept Android SDK Licenses & Install Platforms
+      run: |
+        yes | sdkmanager --licenses || true
+        sdkmanager "platforms;android-36" "build-tools;36.0.0" || true
+
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v4
       with:
-        gradle-version: '8.11.1'
+        gradle-version: '8.13'
 
-    - name: Prepare Environment and Keystore
+    - name: Prepare Keystore and Environment
       run: |
-        # Create .env file from .env.example
         if [ ! -f ".env" ]; then
           cp .env.example .env
         fi
-        
-        # Decode or Generate debug.keystore required by build.gradle.kts
         if [ -f "debug.keystore.base64" ]; then
           base64 -d debug.keystore.base64 > debug.keystore
         fi
@@ -43,11 +46,11 @@ jobs:
         fi
 
     - name: Build Debug APK
-      run: gradle :app:assembleDebug --no-daemon --stacktrace
+      run: gradle :app:assembleDebug --stacktrace --no-daemon
 
-    - name: Upload APK
+    - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
       with:
         name: Samsung-Health-AI-App
-        path: app/build/outputs/apk/debug/app-debug.apk
+        path: app/build/outputs/apk/debug/*.apk
         if-no-files-found: error
