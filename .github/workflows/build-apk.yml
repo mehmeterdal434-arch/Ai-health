@@ -18,16 +18,24 @@ jobs:
       with:
         java-version: '17'
         distribution: 'temurin'
-        cache: gradle
 
-    - name: Grant execute permission for gradlew
-      run: chmod +x gradlew || true
+    - name: Setup Gradle
+      uses: gradle/actions/setup-gradle@v4
+      with:
+        gradle-version: '8.11.1'
 
-    - name: Build Debug APK
-      run: ./gradlew assembleDebug --stacktrace || gradle assembleDebug
+    - name: Restore Debug Keystore
+      run: |
+        if [ -f "debug.keystore.base64" ]; then
+          base64 -d debug.keystore.base64 > debug.keystore
+        fi
 
-    - name: Upload APK Artifact
+    - name: Build APK with Gradle
+      run: gradle :app:assembleDebug --stacktrace
+
+    - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
-        name: Samsung-Health-AI-App-APK
+        name: Samsung-Health-AI-App
         path: app/build/outputs/apk/debug/app-debug.apk
+        if-no-files-found: error
