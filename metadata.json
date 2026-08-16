@@ -1,0 +1,6 @@
+{
+  "name": "Health AI Assistant",
+  "description": "Samsung Health verilerini kural tabanlı motor ve Gemini AI ile analiz eden akıllı sağlık asistanı",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
