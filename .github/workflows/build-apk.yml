@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout Code
+    - name: Checkout Source Code
       uses: actions/checkout@v4
 
     - name: Set up JDK 17
@@ -19,19 +19,31 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
 
+    - name: Set up Android SDK
+      uses: android-actions/setup-android@v3
+
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v4
       with:
         gradle-version: '8.11.1'
 
-    - name: Restore Debug Keystore
+    - name: Prepare Environment and Keystore
       run: |
+        # Create .env file from .env.example
+        if [ ! -f ".env" ]; then
+          cp .env.example .env
+        fi
+        
+        # Decode or Generate debug.keystore required by build.gradle.kts
         if [ -f "debug.keystore.base64" ]; then
           base64 -d debug.keystore.base64 > debug.keystore
         fi
+        if [ ! -f "debug.keystore" ]; then
+          keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+        fi
 
-    - name: Build APK with Gradle
-      run: gradle :app:assembleDebug --stacktrace
+    - name: Build Debug APK
+      run: gradle :app:assembleDebug --no-daemon --stacktrace
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
