@@ -174,44 +174,44 @@ class HealthDataRepository(
                 when (metricType) {
                     MetricType.STEPS -> HistoricalTrendPoint(
                         label = dayLabel,
-                        value = entity.steps.toFloat(),
-                        formattedValue = "${entity.steps}",
-                        category = if (entity.steps >= 8000) HealthCategory.ACHIEVED else HealthCategory.MODERATE,
+                        value = if (entity.hasStepsData) entity.steps.toFloat() else 0f,
+                        formattedValue = if (entity.hasStepsData) "${entity.steps}" else "-",
+                        category = if (entity.hasStepsData) (if (entity.steps >= 8000) HealthCategory.ACHIEVED else HealthCategory.MODERATE) else HealthCategory.UNMEASURED,
                         date = entity.date
                     )
                     MetricType.HEART_RATE -> HistoricalTrendPoint(
                         label = dayLabel,
-                        value = entity.restingHeartRate.toFloat(),
-                        formattedValue = if (entity.restingHeartRate > 0) "${entity.restingHeartRate} bpm" else "-",
-                        category = if (entity.restingHeartRate in 60..100) HealthCategory.NORMAL else HealthCategory.LOW,
+                        value = if (entity.hasHeartRateData && entity.restingHeartRate > 0) entity.restingHeartRate.toFloat() else 0f,
+                        formattedValue = if (entity.hasHeartRateData && entity.restingHeartRate > 0) "${entity.restingHeartRate} bpm" else "-",
+                        category = if (entity.hasHeartRateData && entity.restingHeartRate > 0) (if (entity.restingHeartRate in 60..100) HealthCategory.NORMAL else HealthCategory.LOW) else HealthCategory.UNMEASURED,
                         date = entity.date
                     )
                     MetricType.SLEEP -> HistoricalTrendPoint(
                         label = dayLabel,
-                        value = entity.sleepHours.toFloat(),
-                        formattedValue = if (entity.sleepHours > 0) String.format(Locale.US, "%.1f sa", entity.sleepHours) else "-",
-                        category = if (entity.sleepHours >= 7.0) HealthCategory.OPTIMAL else HealthCategory.BELOW_AVERAGE,
+                        value = if (entity.hasSleepData && entity.sleepHours > 0) entity.sleepHours.toFloat() else 0f,
+                        formattedValue = if (entity.hasSleepData && entity.sleepHours > 0) String.format(Locale.US, "%.1f sa", entity.sleepHours) else "-",
+                        category = if (entity.hasSleepData && entity.sleepHours > 0) (if (entity.sleepHours >= 7.0) HealthCategory.OPTIMAL else HealthCategory.BELOW_AVERAGE) else HealthCategory.UNMEASURED,
                         date = entity.date
                     )
                     MetricType.SPO2 -> HistoricalTrendPoint(
                         label = dayLabel,
-                        value = entity.spO2Percent.toFloat(),
-                        formattedValue = if (entity.spO2Percent > 0) "%${entity.spO2Percent}" else "-",
-                        category = if (entity.spO2Percent >= 95) HealthCategory.NORMAL else HealthCategory.ATTENTION,
+                        value = if (entity.hasSpO2Data && entity.spO2Percent > 0) entity.spO2Percent.toFloat() else 0f,
+                        formattedValue = if (entity.hasSpO2Data && entity.spO2Percent > 0) "%${entity.spO2Percent}" else "-",
+                        category = if (entity.hasSpO2Data && entity.spO2Percent > 0) (if (entity.spO2Percent >= 95) HealthCategory.NORMAL else HealthCategory.ATTENTION) else HealthCategory.UNMEASURED,
                         date = entity.date
                     )
                     MetricType.STRESS -> HistoricalTrendPoint(
                         label = dayLabel,
-                        value = entity.stressScore.toFloat(),
-                        formattedValue = if (entity.stressScore > 0) "${entity.stressScore}" else "-",
-                        category = if (entity.stressScore <= 50) HealthCategory.LOW else HealthCategory.MEDIUM,
+                        value = if (entity.hasStressData && entity.stressScore > 0) entity.stressScore.toFloat() else 0f,
+                        formattedValue = if (entity.hasStressData && entity.stressScore > 0) "${entity.stressScore}" else "-",
+                        category = if (entity.hasStressData && entity.stressScore > 0) (if (entity.stressScore <= 50) HealthCategory.LOW else HealthCategory.MEDIUM) else HealthCategory.UNMEASURED,
                         date = entity.date
                     )
                     MetricType.CALORIES -> HistoricalTrendPoint(
                         label = dayLabel,
-                        value = entity.activeCaloriesKcal.toFloat(),
-                        formattedValue = "${entity.activeCaloriesKcal} kcal",
-                        category = if (entity.activeCaloriesKcal >= 500) HealthCategory.ACHIEVED else HealthCategory.NORMAL,
+                        value = if (entity.hasCaloriesData && entity.activeCaloriesKcal > 0) entity.activeCaloriesKcal.toFloat() else 0f,
+                        formattedValue = if (entity.hasCaloriesData && entity.activeCaloriesKcal > 0) "${entity.activeCaloriesKcal} kcal" else "-",
+                        category = if (entity.hasCaloriesData && entity.activeCaloriesKcal > 0) (if (entity.activeCaloriesKcal >= 500) HealthCategory.ACHIEVED else HealthCategory.NORMAL) else HealthCategory.UNMEASURED,
                         date = entity.date
                     )
                 }

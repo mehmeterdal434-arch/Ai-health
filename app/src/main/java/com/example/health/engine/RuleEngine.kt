@@ -59,7 +59,7 @@ object RuleEngine {
             createUnmeasuredEvaluation(MetricType.SLEEP, "7.0 - 9.0 saat", "Bugün için uyku seansı kaydı bulunamadı.")
         }
 
-        val stepsEval = if (record.hasStepsData || record.steps > 0) {
+        val stepsEval = if (record.hasStepsData) {
             evaluateSteps(record.steps, profile.stepGoal)
         } else {
             createUnmeasuredEvaluation(MetricType.STEPS, "${profile.stepGoal} adım hedefi", "Adım verisi henüz kaydedilmedi.")
@@ -77,7 +77,7 @@ object RuleEngine {
             createUnmeasuredEvaluation(MetricType.STRESS, "0 - 50 (İdeal)", "Stres skoru henüz hesaplanmadı.")
         }
 
-        val calEval = if (record.hasCaloriesData || record.activeCaloriesKcal > 0) {
+        val calEval = if (record.hasCaloriesData) {
             evaluateCalories(record.activeCaloriesKcal, profile.activeCalorieGoalKcal)
         } else {
             createUnmeasuredEvaluation(MetricType.CALORIES, "${profile.activeCalorieGoalKcal} kcal hedefi", "Aktif kalori verisi bekleniyor.")

@@ -302,25 +302,25 @@ fun HealthDashboardScreen(
                     ) {
                         ActivityHighlightItem(
                             icon = "👟",
-                            value = "${record.steps}",
+                            value = if (record.hasStepsData) "${record.steps}" else "--",
                             label = "Adım",
                             color = ColorSteps
                         )
                         ActivityHighlightItem(
                             icon = "📍",
-                            value = String.format(Locale.US, "%.1f km", record.distanceMeters / 1000.0),
+                            value = if (record.distanceMeters > 0) String.format(Locale.US, "%.1f km", record.distanceMeters / 1000.0) else "--",
                             label = "Mesafe",
                             color = ColorDistance
                         )
                         ActivityHighlightItem(
                             icon = "⏱",
-                            value = "${record.activeMinutes} dk",
+                            value = if (record.activeMinutes > 0) "${record.activeMinutes} dk" else "--",
                             label = "Aktif Süre",
                             color = ColorStress
                         )
                         ActivityHighlightItem(
                             icon = "🔥",
-                            value = "${record.activeCaloriesKcal} kcal",
+                            value = if (record.hasCaloriesData && record.activeCaloriesKcal > 0) "${record.activeCaloriesKcal} kcal" else "--",
                             label = "Kalori",
                             color = ColorCalories
                         )

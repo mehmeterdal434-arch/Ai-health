@@ -34,7 +34,7 @@ class ExampleUnitTest {
         assertEquals(HealthCategory.OPTIMAL, optimalEval.category)
         assertEquals(HealthStatusLevel.OPTIMAL, optimalEval.statusLevel)
 
-        val veryLowEval = RuleEngine.evaluateSleep(4.8, 7.5)
+        val veryLowEval = RuleEngine.evaluateSleep(4.0, 7.5)
         assertEquals(HealthCategory.VERY_LOW, veryLowEval.category)
         assertEquals(HealthStatusLevel.CRITICAL, veryLowEval.statusLevel)
 
@@ -102,14 +102,20 @@ class ExampleUnitTest {
         val record = DailyHealthRecord(
             date = "2026-08-16",
             steps = 9500,
+            hasStepsData = true,
             restingHeartRate = 66,
+            hasHeartRateData = true,
             minHeartRate = 58,
             maxHeartRate = 120,
             sleepHours = 8.0,
+            hasSleepData = true,
             deepSleepPercent = 25,
             spO2Percent = 99,
+            hasSpO2Data = true,
             stressScore = 20,
-            activeCaloriesKcal = 550
+            hasStressData = true,
+            activeCaloriesKcal = 550,
+            hasCaloriesData = true
         )
         val summary = RuleEngine.evaluateAll(record, UserHealthProfile())
         assertEquals(HealthStatusLevel.OPTIMAL, summary.overallStatus)
