@@ -51,7 +51,7 @@ class GeminiExplainer(private val context: Context) {
         .build()
 
     companion object {
-        private const val MODEL_NAME = "gemini-3.5-flash"
+        private const val MODEL_NAME = "gemini-2.5-flash"
         private const val BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models/$MODEL_NAME:generateContent"
         const val MANDATORY_DISCLAIMER = "Bu bilgiler tıbbi tavsiye yerine geçmez, endişelerin varsa doktoruna danış."
     }

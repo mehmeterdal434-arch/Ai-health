@@ -12,8 +12,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
@@ -32,33 +31,62 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            HealthAITheme {
-                val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+            val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+            val snackbarHostState = remember { SnackbarHostState() }
 
-                // Health Connect permission launcher contract
-                val requestPermissionLauncher = rememberLauncherForActivityResult(
-                    contract = PermissionController.createRequestPermissionResultContract()
-                ) { grantedPermissions ->
-                    viewModel.refreshPermissionsState()
-                }
+            // Health Connect permission launcher contract
+            val requestPermissionLauncher = rememberLauncherForActivityResult(
+                contract = PermissionController.createRequestPermissionResultContract()
+            ) { grantedPermissions ->
+                viewModel.refreshPermissionsState()
+            }
 
-                fun launchHealthConnectPermissions() {
-                    try {
+            fun launchHealthConnectPermissions() {
+                try {
+                    if (viewModel.healthConnectManager.isHealthConnectAvailable()) {
                         requestPermissionLauncher.launch(viewModel.healthConnectManager.requiredPermissions)
-                    } catch (e: Exception) {
+                    } else {
                         try {
-                            val intent = viewModel.healthConnectManager.getHealthConnectSettingsIntent()
-                            startActivity(intent)
-                        } catch (e2: Exception) {
+                            val settingsIntent = viewModel.healthConnectManager.getHealthConnectSettingsIntent()
+                            startActivity(settingsIntent)
+                        } catch (e2: Throwable) {
+                            try {
+                                startActivity(viewModel.healthConnectManager.getPlayStoreIntentForHealthConnect())
+                            } catch (e3: Throwable) {
+                                // No play store available in preview/emulator
+                            }
+                        }
+                    }
+                } catch (e: Throwable) {
+                    try {
+                        val settingsIntent = viewModel.healthConnectManager.getHealthConnectSettingsIntent()
+                        startActivity(settingsIntent)
+                    } catch (e2: Throwable) {
+                        try {
                             startActivity(viewModel.healthConnectManager.getPlayStoreIntentForHealthConnect())
+                        } catch (e3: Throwable) {
+                            // Ignored
                         }
                     }
                 }
+            }
 
+            LaunchedEffect(uiState.userFeedback) {
+                uiState.userFeedback?.let { fb ->
+                    snackbarHostState.showSnackbar(
+                        message = fb.message,
+                        duration = SnackbarDuration.Short
+                    )
+                    viewModel.dismissFeedback()
+                }
+            }
+
+            HealthAITheme(themeMode = uiState.themeMode) {
                 Scaffold(
                     modifier = Modifier
                         .fillMaxSize()
                         .testTag("main_scaffold"),
+                    snackbarHost = { SnackbarHost(snackbarHostState) },
                     bottomBar = {
                         NavigationBar(
                             modifier = Modifier
@@ -138,19 +166,21 @@ class MainActivity : ComponentActivity() {
                             0 -> HealthDashboardScreen(
                                 uiState = uiState,
                                 onSelectMetric = { viewModel.selectMetricForDetail(it) },
-                                onSyncLiveHealthData = { viewModel.syncHealthData() },
+                                onSyncLiveHealthData = { viewModel.syncHealthData(isManualTrigger = true) },
                                 onRequestPermissions = { launchHealthConnectPermissions() },
                                 onNavigateToAiSummary = { viewModel.selectTab(2) },
                                 onNavigateToGuide = { viewModel.selectTab(3) },
                                 onNavigateToSettings = { viewModel.selectTab(4) },
                                 onStartBreathing = { viewModel.setBreathingSheetOpen(true) },
                                 onAddWater = { viewModel.addWater(it) },
+                                onSetDateFilter = { viewModel.setDateFilter(it) },
                                 onGenerateReportText = { viewModel.generateShareableHealthReport() }
                             )
                             1 -> MetricDetailScreen(
                                 uiState = uiState,
                                 onSelectMetric = { viewModel.selectMetricForDetail(it) },
-                                onRefreshAiExplanation = { viewModel.generateMetricAiInsight(it, forceRefresh = true) }
+                                onRefreshAiExplanation = { viewModel.generateMetricAiInsight(it, forceRefresh = true) },
+                                onSetTrendDays = { viewModel.setTrendDaysCount(it) }
                             )
                             2 -> AiSummaryScreen(
                                 uiState = uiState,
@@ -170,13 +200,15 @@ class MainActivity : ComponentActivity() {
                             4 -> SettingsScreen(
                                 uiState = uiState,
                                 onUpdateProfile = { viewModel.updateProfile(it) },
+                                onUpdateTheme = { viewModel.setThemeMode(it) },
                                 onUpdateApiKey = { viewModel.updateCustomApiKey(it) },
                                 onRequestPermissions = { launchHealthConnectPermissions() },
-                                onSyncNow = { viewModel.syncHealthData() }
+                                onSyncNow = { viewModel.syncHealthData(isManualTrigger = true) },
+                                onClearLocalData = { viewModel.clearLocalData() }
                             )
                         }
 
-                        // Modal Breathing Sheet
+                        // Modal Breathing Recovery Sheet
                         AnimatedVisibility(
                             visible = uiState.isBreathingSheetOpen,
                             enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),

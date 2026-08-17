@@ -27,9 +27,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.health.data.HealthConnectAvailability
 import com.example.health.model.MetricType
+import com.example.health.ui.DateFilterMode
 import com.example.health.ui.HealthUiState
 import com.example.health.ui.components.*
 import com.example.ui.theme.*
+import java.util.Locale
 
 @Composable
 fun HealthDashboardScreen(
@@ -42,11 +44,13 @@ fun HealthDashboardScreen(
     onNavigateToSettings: () -> Unit,
     onStartBreathing: () -> Unit,
     onAddWater: (Int) -> Unit,
+    onSetDateFilter: (DateFilterMode) -> Unit,
     onGenerateReportText: () -> String,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val summary = uiState.summary
+    val record = uiState.currentRecord
 
     // Rotation animation for sync icon when syncing
     val infiniteTransition = rememberInfiniteTransition(label = "sync_rotation")
@@ -65,10 +69,10 @@ fun HealthDashboardScreen(
             .fillMaxSize()
             .padding(horizontal = 16.dp)
             .testTag("health_dashboard_screen"),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-        contentPadding = PaddingValues(top = 16.dp, bottom = 24.dp)
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+        contentPadding = PaddingValues(top = 14.dp, bottom = 28.dp)
     ) {
-        // Top App Bar & Live Sync Status
+        // Top App Bar & Sync Trigger
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -83,7 +87,7 @@ fun HealthDashboardScreen(
                         color = MaterialTheme.colorScheme.primary
                     )
                     Text(
-                        text = "Canlı Samsung Health & Health Connect Entegrasyonu",
+                        text = "Sağlık Takip & Akıllı Analiz Paneli",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -113,15 +117,23 @@ fun HealthDashboardScreen(
             }
         }
 
-        // Health Connect & Permission Live Banner
+        // Date Filter Switcher (Bugün | Dün | 7 Gün | 30 Gün)
+        item {
+            DateSelectorBar(
+                currentFilter = uiState.selectedFilterMode,
+                onFilterSelected = onSetDateFilter
+            )
+        }
+
+        // Health Connect & Source Status Banner
         item {
             Card(
                 shape = RoundedCornerShape(18.dp),
                 colors = CardDefaults.cardColors(
                     containerColor = if (uiState.permissionState.anyGranted)
-                        MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.4f)
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
                     else
-                        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f)
+                        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.45f)
                 ),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -150,15 +162,15 @@ fun HealthDashboardScreen(
                                 imageVector = if (uiState.permissionState.anyGranted) Icons.Default.CheckCircle else Icons.Default.Warning,
                                 contentDescription = null,
                                 tint = if (uiState.permissionState.anyGranted) StatusGoodGreen else MaterialTheme.colorScheme.error,
-                                modifier = Modifier.size(22.dp)
+                                modifier = Modifier.size(20.dp)
                             )
                         }
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text(
-                                text = if (uiState.permissionState.allGranted) "Samsung Health Bağlantısı Aktif"
-                                else if (uiState.permissionState.anyGranted) "Health Connect Kısmi İzinli"
-                                else "Health Connect İzni Gerekli",
+                                text = if (uiState.permissionState.allGranted) "Health Connect: Bağlı (Samsung Health)"
+                                else if (uiState.permissionState.anyGranted) "Health Connect: Kısmi İzin (${uiState.permissionState.grantedCount}/${uiState.permissionState.totalCount})"
+                                else "Health Connect: İzin Bekleniyor",
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurface
@@ -185,55 +197,6 @@ fun HealthDashboardScreen(
             }
         }
 
-        // Quick Action Hub Row (Breathing, Guide, Chat, Share)
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                QuickActionButton(
-                    icon = "🧘",
-                    title = "Nefes",
-                    subtitle = "Gevşeme",
-                    containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f),
-                    modifier = Modifier.weight(1f),
-                    onClick = onStartBreathing
-                )
-                QuickActionButton(
-                    icon = "💬",
-                    title = "AI Koç",
-                    subtitle = "Sohbet",
-                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
-                    modifier = Modifier.weight(1f),
-                    onClick = onNavigateToAiSummary
-                )
-                QuickActionButton(
-                    icon = "📚",
-                    title = "Rehber",
-                    subtitle = "Ne İşe Yarar?",
-                    containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f),
-                    modifier = Modifier.weight(1f),
-                    onClick = onNavigateToGuide
-                )
-                QuickActionButton(
-                    icon = "📋",
-                    title = "Rapor",
-                    subtitle = "Paylaş",
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                    modifier = Modifier.weight(1f),
-                    onClick = {
-                        val report = onGenerateReportText()
-                        val sendIntent = Intent().apply {
-                            action = Intent.ACTION_SEND
-                            putExtra(Intent.EXTRA_TEXT, report)
-                            type = "text/plain"
-                        }
-                        context.startActivity(Intent.createChooser(sendIntent, "Sağlık Raporu"))
-                    }
-                )
-            }
-        }
-
         // Critical Alerts Banner if any
         if (summary != null && summary.hasCriticalConditions) {
             item {
@@ -247,17 +210,18 @@ fun HealthDashboardScreen(
                 Card(
                     shape = RoundedCornerShape(24.dp),
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                        containerColor = MaterialTheme.colorScheme.surface
                     ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .background(
-                                Brush.linearGradient(
+                                Brush.horizontalGradient(
                                     colors = listOf(
-                                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
+                                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
                                         MaterialTheme.colorScheme.surface
                                     )
                                 )
@@ -271,27 +235,26 @@ fun HealthDashboardScreen(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "CANLI GÜNLÜK SAĞLIK SKORU",
+                                    text = "GÜNLÜK SAĞLIK VE HAZIRLIK SKORU",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
-                                    letterSpacing = 1.sp,
+                                    letterSpacing = 0.8.sp,
                                     color = MaterialTheme.colorScheme.primary
                                 )
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
                                     text = "%${summary.overallScore} Hazırlık",
-                                    fontSize = 24.sp,
+                                    fontSize = 26.sp,
                                     fontWeight = FontWeight.ExtraBold,
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
                                 Spacer(modifier = Modifier.height(6.dp))
                                 StatusBadge(status = summary.overallStatus)
-                                Spacer(modifier = Modifier.height(8.dp))
+                                Spacer(modifier = Modifier.height(6.dp))
                                 Text(
-                                    text = "Samsung Health'ten aktarılan gerçek biyometrik verilerin klinik analizi.",
+                                    text = "Biyometrik verilerin klinik algoritma puanı.",
                                     fontSize = 12.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    lineHeight = 16.sp
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
 
@@ -300,7 +263,7 @@ fun HealthDashboardScreen(
                                 modifier = Modifier
                                     .size(76.dp)
                                     .clip(CircleShape)
-                                    .background(summary.overallStatus.color.copy(alpha = 0.15f))
+                                    .background(summary.overallStatus.color.copy(alpha = 0.12f))
                             ) {
                                 CircularProgressIndicator(
                                     progress = { summary.overallScore / 100f },
@@ -322,12 +285,56 @@ fun HealthDashboardScreen(
             }
         }
 
+        // Daily Activity Summary Highlights (Distance, Active Minutes, Calories, Steps)
+        if (record != null) {
+            item {
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        ActivityHighlightItem(
+                            icon = "👟",
+                            value = "${record.steps}",
+                            label = "Adım",
+                            color = ColorSteps
+                        )
+                        ActivityHighlightItem(
+                            icon = "📍",
+                            value = String.format(Locale.US, "%.1f km", record.distanceMeters / 1000.0),
+                            label = "Mesafe",
+                            color = ColorDistance
+                        )
+                        ActivityHighlightItem(
+                            icon = "⏱",
+                            value = "${record.activeMinutes} dk",
+                            label = "Aktif Süre",
+                            color = ColorStress
+                        )
+                        ActivityHighlightItem(
+                            icon = "🔥",
+                            value = "${record.activeCaloriesKcal} kcal",
+                            label = "Kalori",
+                            color = ColorCalories
+                        )
+                    }
+                }
+            }
+        }
+
         // Daily Hydration Tracking Widget
         item {
             Card(
                 shape = RoundedCornerShape(20.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 1.5.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
@@ -343,38 +350,38 @@ fun HealthDashboardScreen(
                     ) {
                         Box(
                             modifier = Modifier
-                                .size(42.dp)
+                                .size(40.dp)
                                 .clip(CircleShape)
-                                .background(ColorSpO2.copy(alpha = 0.15f)),
+                                .background(ColorWater.copy(alpha = 0.15f)),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text("💧", fontSize = 20.sp)
+                            Text("💧", fontSize = 18.sp)
                         }
                         Spacer(modifier = Modifier.width(12.dp))
                         Column {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
-                                    text = "Günlük Hidrasyon",
-                                    fontSize = 14.sp,
+                                    text = "Günlük Su Tüketimi",
+                                    fontSize = 13.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = "${uiState.waterIntakeMl} / 2500 ml",
+                                    text = "${uiState.waterIntakeMl} / ${uiState.waterGoalMl} ml",
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = ColorSpO2
+                                    color = ColorWater
                                 )
                             }
                             Spacer(modifier = Modifier.height(4.dp))
                             LinearProgressIndicator(
-                                progress = { (uiState.waterIntakeMl / 2500f).coerceIn(0f, 1f) },
+                                progress = { (uiState.waterIntakeMl.toFloat() / uiState.waterGoalMl.toFloat()).coerceIn(0f, 1f) },
                                 modifier = Modifier
                                     .fillMaxWidth(0.9f)
                                     .height(6.dp)
                                     .clip(RoundedCornerShape(3.dp)),
-                                color = ColorSpO2,
+                                color = ColorWater,
                                 trackColor = MaterialTheme.colorScheme.surfaceVariant
                             )
                         }
@@ -400,12 +407,12 @@ fun HealthDashboardScreen(
             }
         }
 
-        // AI Daily Briefing Teaser Card
+        // AI Briefing Teaser Card
         item {
             Card(
                 shape = RoundedCornerShape(20.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
                 ),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -453,13 +460,13 @@ fun HealthDashboardScreen(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "Canlı sağlık verileri analiz ediliyor...",
+                                text = "Sağlık verileri analiz ediliyor...",
                                 fontSize = 12.sp,
                                 color = MaterialTheme.colorScheme.primary
                             )
                         }
                     } else {
-                        val brief = uiState.fullDayAiInsight?.explanationText ?: "Günün sağlık özetini ve AI tavsiyelerini incelemek için dokunun."
+                        val brief = uiState.fullDayAiInsight?.explanationText ?: "Günün sağlık sentezini ve AI önerilerini incelemek için dokunun."
                         Text(
                             text = brief,
                             fontSize = 13.sp,
@@ -472,6 +479,55 @@ fun HealthDashboardScreen(
             }
         }
 
+        // Quick Hub Row (Nefes, AI Koç, Rehber, Rapor)
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                QuickActionButton(
+                    icon = "🧘",
+                    title = "Nefes",
+                    subtitle = "Gevşeme",
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    modifier = Modifier.weight(1f),
+                    onClick = onStartBreathing
+                )
+                QuickActionButton(
+                    icon = "💬",
+                    title = "AI Koç",
+                    subtitle = "Sohbet",
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    modifier = Modifier.weight(1f),
+                    onClick = onNavigateToAiSummary
+                )
+                QuickActionButton(
+                    icon = "📚",
+                    title = "Rehber",
+                    subtitle = "Metrikler",
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    modifier = Modifier.weight(1f),
+                    onClick = onNavigateToGuide
+                )
+                QuickActionButton(
+                    icon = "📋",
+                    title = "Rapor",
+                    subtitle = "Paylaş",
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    modifier = Modifier.weight(1f),
+                    onClick = {
+                        val report = onGenerateReportText()
+                        val sendIntent = Intent().apply {
+                            action = Intent.ACTION_SEND
+                            putExtra(Intent.EXTRA_TEXT, report)
+                            type = "text/plain"
+                        }
+                        context.startActivity(Intent.createChooser(sendIntent, "Sağlık Raporu"))
+                    }
+                )
+            }
+        }
+
         // Section Title for Metrics
         item {
             Row(
@@ -480,13 +536,13 @@ fun HealthDashboardScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Canlı Sağlık Metrikleri",
+                    text = "Biyometrik Metrikler",
                     fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold,
+                    fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    text = "Detay ve Trend İçin Dokunun",
+                    text = "Grafik & Detay İçin Dokun",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -507,9 +563,17 @@ fun HealthDashboardScreen(
             metrics.forEach { metricType ->
                 val eval = summary.evaluations[metricType]
                 if (eval != null) {
+                    val progressRatio: Float? = when (metricType) {
+                        MetricType.STEPS -> (record?.steps?.toFloat() ?: 0f) / uiState.profile.stepGoal.toFloat()
+                        MetricType.SLEEP -> ((record?.sleepHours?.toFloat() ?: 0f) / uiState.profile.sleepBaselineHours.toFloat())
+                        MetricType.CALORIES -> ((record?.activeCaloriesKcal?.toFloat() ?: 0f) / uiState.profile.activeCalorieGoalKcal.toFloat())
+                        else -> null
+                    }
+
                     item {
                         MetricCardItem(
                             evaluation = eval,
+                            progressRatio = progressRatio,
                             onClick = { onSelectMetric(metricType) }
                         )
                     }
@@ -525,6 +589,34 @@ fun HealthDashboardScreen(
 }
 
 @Composable
+fun ActivityHighlightItem(
+    icon: String,
+    value: String,
+    label: String,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(text = icon, fontSize = 16.sp)
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            text = value,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Text(
+            text = label,
+            fontSize = 10.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
 fun QuickActionButton(
     icon: String,
     title: String,
@@ -536,12 +628,13 @@ fun QuickActionButton(
     Surface(
         color = containerColor,
         shape = RoundedCornerShape(16.dp),
+        shadowElevation = 1.dp,
         modifier = modifier
             .clip(RoundedCornerShape(16.dp))
             .clickable { onClick() }
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp),
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 10.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {

@@ -12,7 +12,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -33,6 +33,7 @@ fun MetricDetailScreen(
     uiState: HealthUiState,
     onSelectMetric: (MetricType) -> Unit,
     onRefreshAiExplanation: (MetricType) -> Unit,
+    onSetTrendDays: (Int) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val selectedMetric = uiState.selectedMetricForDetail
@@ -47,9 +48,9 @@ fun MetricDetailScreen(
             .fillMaxSize()
             .padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
-        contentPadding = PaddingValues(top = 16.dp, bottom = 24.dp)
+        contentPadding = PaddingValues(top = 16.dp, bottom = 28.dp)
     ) {
-        // Metric Switcher Chips
+        // Metric Switcher Horizontal Chips
         item {
             Row(
                 modifier = Modifier
@@ -94,7 +95,7 @@ fun MetricDetailScreen(
                     colors = CardDefaults.cardColors(
                         containerColor = MaterialTheme.colorScheme.surface
                     ),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(
@@ -131,7 +132,7 @@ fun MetricDetailScreen(
                                         color = MaterialTheme.colorScheme.onSurface
                                     )
                                     Text(
-                                        text = "Bugünkü Samsung Health Değeri",
+                                        text = "Samsung Health & Klinik Değerlendirme",
                                         fontSize = 12.sp,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -148,8 +149,8 @@ fun MetricDetailScreen(
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
-                                text = evaluation.formattedValue,
-                                fontSize = 36.sp,
+                                text = if (evaluation.hasMeasuredData) evaluation.formattedValue else "Ölçüm Yok",
+                                fontSize = 34.sp,
                                 fontWeight = FontWeight.ExtraBold,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
@@ -162,7 +163,7 @@ fun MetricDetailScreen(
                             text = evaluation.differenceFromBaseline,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = evaluation.statusLevel.color
+                            color = if (evaluation.hasMeasuredData) evaluation.statusLevel.color else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -176,48 +177,45 @@ fun MetricDetailScreen(
             }
         }
 
-        // 7-Day Trend Chart
+        // Trend Chart Range Toggle (7 Gün vs 30 Gün)
         item {
-            Card(
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
-                ),
-                modifier = Modifier.fillMaxWidth()
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Son 7 Günlük Trend Grafiği",
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = "Samsung Health",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                Text(
+                    text = "Geçmiş Eğilim Analizi",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
 
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    TrendBarChart(
-                        trendList = trendList,
-                        accentColor = accentColor,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(140.dp)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    FilterChip(
+                        selected = uiState.trendDaysCount == 7,
+                        onClick = { onSetTrendDays(7) },
+                        label = { Text("7 Gün", fontSize = 11.sp) }
+                    )
+                    FilterChip(
+                        selected = uiState.trendDaysCount == 30,
+                        onClick = { onSetTrendDays(30) },
+                        label = { Text("30 Gün", fontSize = 11.sp) }
                     )
                 }
             }
         }
 
-        // Rule Engine Analysis Card (Offline / Deterministic Logic)
+        // Interactive Trend Chart
+        item {
+            InteractiveTrendChart(
+                points = trendList,
+                metricType = selectedMetric,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
+        // Deterministic Rule Engine Analysis Card
         if (evaluation != null) {
             item {
                 Card(
@@ -225,20 +223,20 @@ fun MetricDetailScreen(
                     colors = CardDefaults.cardColors(
                         containerColor = MaterialTheme.colorScheme.surface
                     ),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.5.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
                                 imageVector = Icons.Outlined.Rule,
-                                contentDescription = "Kural",
+                                contentDescription = "Kural Motoru",
                                 tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(20.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "Kural Motoru Tıbbi Eşik Analizi",
+                                text = "Klinik Eşik ve Kural Analizi",
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurface
@@ -266,7 +264,7 @@ fun MetricDetailScreen(
                             }
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "Kategori Çıktısı",
+                                    text = "Kategori",
                                     fontSize = 11.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -280,13 +278,11 @@ fun MetricDetailScreen(
                         }
 
                         Spacer(modifier = Modifier.height(10.dp))
-
                         HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
-
                         Spacer(modifier = Modifier.height(10.dp))
 
                         Text(
-                            text = "Klinik Özet: ${evaluation.clinicalSummary}",
+                            text = "Klinik Çıkarım: ${evaluation.clinicalSummary}",
                             fontSize = 13.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             lineHeight = 18.sp
@@ -296,7 +292,7 @@ fun MetricDetailScreen(
             }
         }
 
-        // Gemini AI Explanation Card
+        // Gemini AI Medical Explanation Card
         item {
             Card(
                 shape = RoundedCornerShape(20.dp),
@@ -370,7 +366,7 @@ fun MetricDetailScreen(
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Column {
                                     Text(
-                                        text = "Pratik Öneri",
+                                        text = "Pratik Tavsiye",
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = MaterialTheme.colorScheme.primary
@@ -387,7 +383,7 @@ fun MetricDetailScreen(
                         }
                     } else {
                         Text(
-                            text = "Açıklama üretiliyor...",
+                            text = "Açıklama hazırlanıyor...",
                             fontSize = 13.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -399,67 +395,6 @@ fun MetricDetailScreen(
         // Medical Disclaimer
         item {
             MedicalDisclaimerCard()
-        }
-    }
-}
-
-@Composable
-fun TrendBarChart(
-    trendList: List<HistoricalTrendPoint>,
-    accentColor: Color,
-    modifier: Modifier = Modifier
-) {
-    if (trendList.isEmpty()) {
-        Box(modifier = modifier, contentAlignment = Alignment.Center) {
-            Text(
-                text = "Geçmiş veri yükleniyor...",
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        return
-    }
-
-    val maxVal = trendList.maxOfOrNull { it.value }?.coerceAtLeast(1f) ?: 1f
-
-    Row(
-        modifier = modifier,
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.Bottom
-    ) {
-        trendList.forEach { point ->
-            val heightFraction = (point.value / maxVal).coerceIn(0.15f, 1f)
-
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.weight(1f)
-            ) {
-                Text(
-                    text = point.formattedValue.take(5),
-                    fontSize = 10.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Box(
-                    modifier = Modifier
-                        .fillMaxHeight(0.7f * heightFraction)
-                        .width(18.dp)
-                        .clip(RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp))
-                        .background(
-                            Brush.verticalGradient(
-                                colors = listOf(accentColor, accentColor.copy(alpha = 0.5f))
-                            )
-                        )
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = point.label,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-            }
         }
     }
 }

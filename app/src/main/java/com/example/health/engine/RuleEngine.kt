@@ -4,10 +4,42 @@ import com.example.health.model.*
 import java.util.Locale
 import kotlin.math.roundToInt
 
+data class UserHealthProfile(
+    val stepGoal: Int = 10000,
+    val sleepBaselineHours: Double = 8.0,
+    val restingHeartRateBaselineBpm: Int = 65,
+    val activeCalorieGoalKcal: Int = 500,
+    val activeMinutesGoal: Int = 30,
+    val waterGoalMl: Int = 2500
+)
+
+object HealthThresholds {
+    const val HR_CRITICAL_BRADYCARDIA = 45
+    const val HR_LOW_THRESHOLD = 55
+    const val HR_NORMAL_MAX = 90
+    const val HR_CRITICAL_TACHYCARDIA = 115
+
+    const val SLEEP_VERY_LOW_HOURS = 4.5
+    const val SLEEP_BELOW_AVG_RATIO = 0.8
+    const val SLEEP_OPTIMAL_MIN_HOURS = 7.0
+    const val SLEEP_OPTIMAL_MAX_HOURS = 9.0
+
+    const val STEPS_LOW_RATIO = 0.4
+    const val STEPS_MODERATE_RATIO = 0.75
+
+    const val SPO2_CRITICAL = 90
+    const val SPO2_NORMAL_MIN = 95
+
+    const val STRESS_REST_MAX = 25
+    const val STRESS_LOW_MAX = 50
+    const val STRESS_MEDIUM_MAX = 75
+
+    const val CALORIES_LOW_RATIO = 0.5
+}
+
 /**
- * Deterministic Rule Engine for Samsung Health telemetry.
+ * Deterministic Rule Engine for Samsung Health & Health Connect telemetry.
  * Operates completely offline to guarantee medical boundaries and safety standards.
- * The outputs of this engine are the ONLY inputs permitted for LLM natural language generation.
  */
 object RuleEngine {
 
@@ -15,12 +47,41 @@ object RuleEngine {
         record: DailyHealthRecord,
         profile: UserHealthProfile = UserHealthProfile()
     ): StructuredHealthSummary {
-        val hrEval = evaluateHeartRate(record.restingHeartRate)
-        val sleepEval = evaluateSleep(record.sleepHours, profile.sleepBaselineHours)
-        val stepsEval = evaluateSteps(record.steps, profile.stepGoal)
-        val spO2Eval = evaluateSpO2(record.spO2Percent)
-        val stressEval = evaluateStress(record.stressScore)
-        val calEval = evaluateCalories(record.activeCaloriesKcal, profile.activeCalorieGoalKcal)
+        val hrEval = if (record.hasHeartRateData && record.restingHeartRate > 0) {
+            evaluateHeartRate(record.restingHeartRate)
+        } else {
+            createUnmeasuredEvaluation(MetricType.HEART_RATE, "60 - 100 bpm", "Bugün için dinlenik nabız ölçümü henüz senkronize edilmedi.")
+        }
+
+        val sleepEval = if (record.hasSleepData && record.sleepHours > 0.0) {
+            evaluateSleep(record.sleepHours, profile.sleepBaselineHours)
+        } else {
+            createUnmeasuredEvaluation(MetricType.SLEEP, "7.0 - 9.0 saat", "Bugün için uyku seansı kaydı bulunamadı.")
+        }
+
+        val stepsEval = if (record.hasStepsData || record.steps > 0) {
+            evaluateSteps(record.steps, profile.stepGoal)
+        } else {
+            createUnmeasuredEvaluation(MetricType.STEPS, "${profile.stepGoal} adım hedefi", "Adım verisi henüz kaydedilmedi.")
+        }
+
+        val spO2Eval = if (record.hasSpO2Data && record.spO2Percent > 0) {
+            evaluateSpO2(record.spO2Percent)
+        } else {
+            createUnmeasuredEvaluation(MetricType.SPO2, "%95 - %100", "Kandaki oksijen doygunluğu (SpO2) ölçümü bekleniyor.")
+        }
+
+        val stressEval = if (record.hasStressData && record.stressScore > 0) {
+            evaluateStress(record.stressScore)
+        } else {
+            createUnmeasuredEvaluation(MetricType.STRESS, "0 - 50 (İdeal)", "Stres skoru henüz hesaplanmadı.")
+        }
+
+        val calEval = if (record.hasCaloriesData || record.activeCaloriesKcal > 0) {
+            evaluateCalories(record.activeCaloriesKcal, profile.activeCalorieGoalKcal)
+        } else {
+            createUnmeasuredEvaluation(MetricType.CALORIES, "${profile.activeCalorieGoalKcal} kcal hedefi", "Aktif kalori verisi bekleniyor.")
+        }
 
         val evalMap = mapOf(
             MetricType.HEART_RATE to hrEval,
@@ -38,14 +99,21 @@ object RuleEngine {
             }
         }
 
-        // Overall readiness / score calculation
-        val overallScore = calculateOverallScore(evalMap)
+        // Overall score calculation over measured metrics
+        val measuredEvals = evalMap.values.filter { it.hasMeasuredData }
+        val overallScore = if (measuredEvals.isNotEmpty()) {
+            calculateOverallScore(measuredEvals)
+        } else {
+            0
+        }
+
         val overallStatus = when {
             criticalAlerts.isNotEmpty() -> HealthStatusLevel.CRITICAL
             overallScore >= 80 -> HealthStatusLevel.OPTIMAL
             overallScore >= 65 -> HealthStatusLevel.GOOD
             overallScore >= 50 -> HealthStatusLevel.ATTENTION
-            else -> HealthStatusLevel.CRITICAL
+            overallScore > 0 -> HealthStatusLevel.ATTENTION
+            else -> HealthStatusLevel.LOW
         }
 
         return StructuredHealthSummary(
@@ -56,6 +124,26 @@ object RuleEngine {
             overallStatus = overallStatus,
             hasCriticalConditions = criticalAlerts.isNotEmpty(),
             criticalAlerts = criticalAlerts
+        )
+    }
+
+    private fun createUnmeasuredEvaluation(
+        type: MetricType,
+        normalRange: String,
+        summary: String
+    ): MetricEvaluation {
+        return MetricEvaluation(
+            metricType = type,
+            rawValue = 0.0,
+            formattedValue = "Ölçüm Yok",
+            category = HealthCategory.UNMEASURED,
+            statusLevel = HealthStatusLevel.LOW,
+            normalRange = normalRange,
+            differenceFromBaseline = "Veri bekleniyor",
+            clinicalSummary = summary,
+            isCritical = false,
+            criticalAlertMessage = null,
+            hasMeasuredData = false
         )
     }
 
@@ -75,7 +163,8 @@ object RuleEngine {
                     differenceFromBaseline = "${60 - restingBpm} bpm normalin altında",
                     clinicalSummary = "Şiddetli bradikardi (aşırı düşük nabız) tespit edildi.",
                     isCritical = true,
-                    criticalAlertMessage = "Kritik Düşük Kalp Hızı ($restingBpm bpm). Baş dönmesi veya baygınlık hissi varsa derhal bir sağlık kuruluşuna başvurun."
+                    criticalAlertMessage = "Kritik Düşük Kalp Hızı ($restingBpm bpm). Baş dönmesi veya baygınlık hissi varsa bir sağlık kuruluşuna danışın.",
+                    hasMeasuredData = true
                 )
             }
             restingBpm < HealthThresholds.HR_LOW_THRESHOLD -> {
@@ -87,8 +176,9 @@ object RuleEngine {
                     statusLevel = HealthStatusLevel.LOW,
                     normalRange = "60 - 100 bpm",
                     differenceFromBaseline = "${60 - restingBpm} bpm normal referansın altında",
-                    clinicalSummary = "Hafif bradikardi / sporcu kalp ritmi seviyesi.",
-                    isCritical = false
+                    clinicalSummary = "Hafif bradikardi / sporcu dinlenik kalp ritmi profili.",
+                    isCritical = false,
+                    hasMeasuredData = true
                 )
             }
             restingBpm <= HealthThresholds.HR_NORMAL_MAX -> {
@@ -101,7 +191,8 @@ object RuleEngine {
                     normalRange = "60 - 100 bpm",
                     differenceFromBaseline = "Standart dinlenik referans aralığında",
                     clinicalSummary = "Sağlıklı dinlenik kalp atış hızı.",
-                    isCritical = false
+                    isCritical = false,
+                    hasMeasuredData = true
                 )
             }
             restingBpm < HealthThresholds.HR_CRITICAL_TACHYCARDIA -> {
@@ -113,8 +204,9 @@ object RuleEngine {
                     statusLevel = HealthStatusLevel.ATTENTION,
                     normalRange = "60 - 100 bpm",
                     differenceFromBaseline = "${restingBpm - 100} bpm normalin üstünde",
-                    clinicalSummary = "Yükselmiş dinlenik nabız (Taşikardi eğilimi). Kafein, stres veya yorgunluk etkileyebilir.",
-                    isCritical = false
+                    clinicalSummary = "Yükselmiş dinlenik nabız. Kafein, stres veya yorgunluk etkileyebilir.",
+                    isCritical = false,
+                    hasMeasuredData = true
                 )
             }
             else -> {
@@ -128,7 +220,8 @@ object RuleEngine {
                     differenceFromBaseline = "${restingBpm - 100} bpm yüksek",
                     clinicalSummary = "Kritik yüksek dinlenik nabız tespit edildi.",
                     isCritical = true,
-                    criticalAlertMessage = "Kritik Yüksek Kalp Hızı ($restingBpm bpm). Dinlenme halindeyken bu değer acil tıbbi değerlendirme gerektirebilir."
+                    criticalAlertMessage = "Kritik Yüksek Kalp Hızı ($restingBpm bpm). Dinlenme halindeyken bu değer acil tıbbi değerlendirme gerektirebilir.",
+                    hasMeasuredData = true
                 )
             }
         }
@@ -140,9 +233,9 @@ object RuleEngine {
     fun evaluateSleep(hours: Double, baselineHours: Double): MetricEvaluation {
         val diffHours = hours - baselineHours
         val diffStr = if (diffHours >= 0) {
-            "+${String.format(Locale.US, "%.1f", diffHours)} sa ortalamanın üstünde"
+            "+${String.format(Locale.US, "%.1f", diffHours)} sa hedefin üstünde"
         } else {
-            "${String.format(Locale.US, "%.1f", diffHours)} sa ortalamanın altında"
+            "${String.format(Locale.US, "%.1f", diffHours)} sa hedefin altında"
         }
 
         return when {
@@ -156,7 +249,8 @@ object RuleEngine {
                     normalRange = "7.0 - 9.0 saat",
                     differenceFromBaseline = diffStr,
                     clinicalSummary = "Ciddi uyku eksikliği. Zihinsel odaklanma ve bağışıklık toparlanması kısıtlı.",
-                    isCritical = false
+                    isCritical = false,
+                    hasMeasuredData = true
                 )
             }
             hours <= (baselineHours * HealthThresholds.SLEEP_BELOW_AVG_RATIO) -> {
@@ -168,8 +262,9 @@ object RuleEngine {
                     statusLevel = HealthStatusLevel.ATTENTION,
                     normalRange = "7.0 - 9.0 saat",
                     differenceFromBaseline = diffStr,
-                    clinicalSummary = "Kişisel ortalamanızın %20'den fazla altında uyku süresi.",
-                    isCritical = false
+                    clinicalSummary = "Hedeflenen ortalamanın altında uyku süresi.",
+                    isCritical = false,
+                    hasMeasuredData = true
                 )
             }
             hours in HealthThresholds.SLEEP_OPTIMAL_MIN_HOURS..HealthThresholds.SLEEP_OPTIMAL_MAX_HOURS -> {
@@ -181,8 +276,9 @@ object RuleEngine {
                     statusLevel = HealthStatusLevel.OPTIMAL,
                     normalRange = "7.0 - 9.0 saat",
                     differenceFromBaseline = diffStr,
-                    clinicalSummary = "Mükemmel dinlenme ve biyolojik onarım süresi.",
-                    isCritical = false
+                    clinicalSummary = "Mükemmel dinlenme ve hücresel toparlanma süresi.",
+                    isCritical = false,
+                    hasMeasuredData = true
                 )
             }
             hours > HealthThresholds.SLEEP_OPTIMAL_MAX_HOURS -> {
@@ -195,7 +291,8 @@ object RuleEngine {
                     normalRange = "7.0 - 9.0 saat",
                     differenceFromBaseline = diffStr,
                     clinicalSummary = "Uzun dinlenme periyodu.",
-                    isCritical = false
+                    isCritical = false,
+                    hasMeasuredData = true
                 )
             }
             else -> {
@@ -207,8 +304,9 @@ object RuleEngine {
                     statusLevel = HealthStatusLevel.GOOD,
                     normalRange = "7.0 - 9.0 saat",
                     differenceFromBaseline = diffStr,
-                    clinicalSummary = "Kabul edilebilir uyku süresi.",
-                    isCritical = false
+                    clinicalSummary = "Yeterli uyku süresi.",
+                    isCritical = false,
+                    hasMeasuredData = true
                 )
             }
         }
@@ -218,7 +316,7 @@ object RuleEngine {
      * Evaluates daily steps relative to user target and WHO guidelines.
      */
     fun evaluateSteps(steps: Int, target: Int): MetricEvaluation {
-        val percent = ((steps.toDouble() / target.toDouble()) * 100).roundToInt()
+        val percent = if (target > 0) ((steps.toDouble() / target.toDouble()) * 100).roundToInt() else 0
         val diff = steps - target
         val diffStr = if (diff >= 0) "+$diff adım (Hedefin %$percent'i)" else "$diff adım (Hedefin %$percent'i)"
 
@@ -232,8 +330,9 @@ object RuleEngine {
                     statusLevel = HealthStatusLevel.ATTENTION,
                     normalRange = "$target adım hedefi",
                     differenceFromBaseline = diffStr,
-                    clinicalSummary = "Hareketsiz / sedanter gün profili.",
-                    isCritical = false
+                    clinicalSummary = "Düşük günlük aktivite seviyesi.",
+                    isCritical = false,
+                    hasMeasuredData = true
                 )
             }
             steps < (target * HealthThresholds.STEPS_MODERATE_RATIO) -> {
@@ -246,7 +345,8 @@ object RuleEngine {
                     normalRange = "$target adım hedefi",
                     differenceFromBaseline = diffStr,
                     clinicalSummary = "Orta seviye günlük hareketlilik.",
-                    isCritical = false
+                    isCritical = false,
+                    hasMeasuredData = true
                 )
             }
             steps < (target * 1.5) -> {
@@ -258,8 +358,9 @@ object RuleEngine {
                     statusLevel = HealthStatusLevel.OPTIMAL,
                     normalRange = "$target adım hedefi",
                     differenceFromBaseline = diffStr,
-                    clinicalSummary = "Günlük kardiyo ve adım hedefine başarıyla ulaşıldı.",
-                    isCritical = false
+                    clinicalSummary = "Günlük adım hedefine başarıyla ulaşıldı.",
+                    isCritical = false,
+                    hasMeasuredData = true
                 )
             }
             else -> {
@@ -272,7 +373,8 @@ object RuleEngine {
                     normalRange = "$target adım hedefi",
                     differenceFromBaseline = diffStr,
                     clinicalSummary = "Yüksek aktif performans seviyesi.",
-                    isCritical = false
+                    isCritical = false,
+                    hasMeasuredData = true
                 )
             }
         }
@@ -294,7 +396,8 @@ object RuleEngine {
                     differenceFromBaseline = "%${95 - spO2} düşük",
                     clinicalSummary = "Hipoksemi (kritik düşük kan oksijeni) göstergesi.",
                     isCritical = true,
-                    criticalAlertMessage = "Kritik Düşük Oksijen Satürasyonu (%$spO2). Nefes darlığı veya göğüs baskısı varsa lütfen vakit kaybetmeden acil tıbbi destek alın."
+                    criticalAlertMessage = "Kritik Düşük Oksijen Satürasyonu (%$spO2). Nefes darlığı veya göğüs baskısı varsa lütfen vakit kaybetmeden tıbbi destek alın.",
+                    hasMeasuredData = true
                 )
             }
             spO2 < HealthThresholds.SPO2_NORMAL_MIN -> {
@@ -306,8 +409,9 @@ object RuleEngine {
                     statusLevel = HealthStatusLevel.ATTENTION,
                     normalRange = "%95 - %100",
                     differenceFromBaseline = "%${95 - spO2} sınırda düşük",
-                    clinicalSummary = "Sınırda oksijen satürasyonu. Derin nefes egzersizi ve ortam havalandırması önerilir.",
-                    isCritical = false
+                    clinicalSummary = "Sınırda oksijen satürasyonu. Derin nefes egzersizi ve havalandırma önerilir.",
+                    isCritical = false,
+                    hasMeasuredData = true
                 )
             }
             else -> {
@@ -318,16 +422,17 @@ object RuleEngine {
                     category = HealthCategory.NORMAL,
                     statusLevel = HealthStatusLevel.OPTIMAL,
                     normalRange = "%95 - %100",
-                    differenceFromBaseline = "Optimal solunum oksijenasyonu",
+                    differenceFromBaseline = "Optimal solunum doygunluğu",
                     clinicalSummary = "Kandaki oksijen doygunluğu mükemmel seviyede.",
-                    isCritical = false
+                    isCritical = false,
+                    hasMeasuredData = true
                 )
             }
         }
     }
 
     /**
-     * Evaluates Samsung Health Stress Score (0-100).
+     * Evaluates Stress Score (0-100).
      */
     fun evaluateStress(stressScore: Int): MetricEvaluation {
         return when {
@@ -341,7 +446,8 @@ object RuleEngine {
                     normalRange = "0 - 50 (Düşük/Dinlenme)",
                     differenceFromBaseline = "Parasempatik dinlenme modu aktif",
                     clinicalSummary = "Beden ve zihin yüksek düzeyde sakin ve toparlanma durumunda.",
-                    isCritical = false
+                    isCritical = false,
+                    hasMeasuredData = true
                 )
             }
             stressScore <= HealthThresholds.STRESS_LOW_MAX -> {
@@ -354,7 +460,8 @@ object RuleEngine {
                     normalRange = "0 - 50 (Düşük)",
                     differenceFromBaseline = "Dengeli otonom sinir sistemi",
                     clinicalSummary = "Rutin günlük stres düzeyi kontrol altında.",
-                    isCritical = false
+                    isCritical = false,
+                    hasMeasuredData = true
                 )
             }
             stressScore <= HealthThresholds.STRESS_MEDIUM_MAX -> {
@@ -366,8 +473,9 @@ object RuleEngine {
                     statusLevel = HealthStatusLevel.ATTENTION,
                     normalRange = "0 - 50 (İdeal)",
                     differenceFromBaseline = "Hafif yükselmiş sempatik aktivite",
-                    clinicalSummary = "Orta seviye zihinsel/fiziksel stres. Kısa molalar faydalı olabilir.",
-                    isCritical = false
+                    clinicalSummary = "Orta seviye stres. Kısa molalar ve gevşeme önerilir.",
+                    isCritical = false,
+                    hasMeasuredData = true
                 )
             }
             else -> {
@@ -380,7 +488,8 @@ object RuleEngine {
                     normalRange = "0 - 50 (İdeal)",
                     differenceFromBaseline = "Belirgin yüksek stres yükü",
                     clinicalSummary = "Yüksek sempatik uyarılma. Nefes çalışması ve gevşeme molası tavsiye edilir.",
-                    isCritical = false
+                    isCritical = false,
+                    hasMeasuredData = true
                 )
             }
         }
@@ -404,7 +513,8 @@ object RuleEngine {
                     normalRange = "$targetKcal kcal hedefi",
                     differenceFromBaseline = diffStr,
                     clinicalSummary = "Düşük aktif enerji harcaması.",
-                    isCritical = false
+                    isCritical = false,
+                    hasMeasuredData = true
                 )
             }
             caloriesKcal < targetKcal -> {
@@ -417,7 +527,8 @@ object RuleEngine {
                     normalRange = "$targetKcal kcal hedefi",
                     differenceFromBaseline = diffStr,
                     clinicalSummary = "Hedefe yakın aktif kalori yakımı.",
-                    isCritical = false
+                    isCritical = false,
+                    hasMeasuredData = true
                 )
             }
             else -> {
@@ -430,15 +541,17 @@ object RuleEngine {
                     normalRange = "$targetKcal kcal hedefi",
                     differenceFromBaseline = diffStr,
                     clinicalSummary = "Günlük aktif kalori hedefi başarıyla tamamlandı.",
-                    isCritical = false
+                    isCritical = false,
+                    hasMeasuredData = true
                 )
             }
         }
     }
 
-    private fun calculateOverallScore(evaluations: Map<MetricType, MetricEvaluation>): Int {
+    private fun calculateOverallScore(evaluations: Collection<MetricEvaluation>): Int {
+        if (evaluations.isEmpty()) return 0
         var score = 0
-        evaluations.values.forEach { eval ->
+        evaluations.forEach { eval ->
             val metricScore = when (eval.statusLevel) {
                 HealthStatusLevel.OPTIMAL -> 100
                 HealthStatusLevel.GOOD -> 85
@@ -448,6 +561,6 @@ object RuleEngine {
             }
             score += metricScore
         }
-        return (score / evaluations.size.coerceAtLeast(1))
+        return (score / evaluations.size)
     }
 }

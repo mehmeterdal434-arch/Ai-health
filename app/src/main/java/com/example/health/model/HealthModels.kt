@@ -32,10 +32,11 @@ enum class HealthCategory(val label: String) {
     EXCELLENT("Mükemmel"),
 
     // Stress
-    REST("Dinlenme / Çok Düşük"),
-    MEDIUM("Orta"),
+    REST("Dinlenme / Rahat"),
+    MEDIUM("Orta Stres"),
 
-    // General
+    // General & Unmeasured
+    UNMEASURED("Ölçüm Bekleniyor"),
     GOOD("İyi"),
     ATTENTION("Dikkat Gerektirir"),
     CRITICAL("Kritik Risk")
@@ -62,7 +63,8 @@ data class MetricEvaluation(
     val differenceFromBaseline: String,
     val clinicalSummary: String,
     val isCritical: Boolean = false,
-    val criticalAlertMessage: String? = null
+    val criticalAlertMessage: String? = null,
+    val hasMeasuredData: Boolean = true
 )
 
 /**
@@ -71,15 +73,23 @@ data class MetricEvaluation(
 data class DailyHealthRecord(
     val date: String, // e.g. "2026-08-16"
     val timestamp: Long = System.currentTimeMillis(),
-    val steps: Int,
-    val restingHeartRate: Int,
-    val minHeartRate: Int,
-    val maxHeartRate: Int,
-    val sleepHours: Double,
-    val deepSleepPercent: Int,
-    val spO2Percent: Int,
-    val stressScore: Int, // 0-100
-    val activeCaloriesKcal: Int
+    val steps: Int = 0,
+    val hasStepsData: Boolean = false,
+    val restingHeartRate: Int = 0,
+    val hasHeartRateData: Boolean = false,
+    val minHeartRate: Int = 0,
+    val maxHeartRate: Int = 0,
+    val sleepHours: Double = 0.0,
+    val hasSleepData: Boolean = false,
+    val deepSleepPercent: Int = 0,
+    val spO2Percent: Int = 0,
+    val hasSpO2Data: Boolean = false,
+    val stressScore: Int = 0, // 0-100
+    val hasStressData: Boolean = false,
+    val activeCaloriesKcal: Int = 0,
+    val hasCaloriesData: Boolean = false,
+    val distanceMeters: Double = 0.0,
+    val activeMinutes: Int = 0
 )
 
 /**
@@ -104,6 +114,7 @@ data class StructuredHealthSummary(
             "${type.name}": {
               "name": "${type.displayName}",
               "value": "${eval.formattedValue}",
+              "hasData": ${eval.hasMeasuredData},
               "category": "${eval.category.name} (${eval.category.label})",
               "status": "${eval.statusLevel.tag}",
               "normalRange": "${eval.normalRange}",
@@ -131,7 +142,8 @@ data class HistoricalTrendPoint(
     val label: String, // e.g., "Pzt", "10 Ağu"
     val value: Float,
     val formattedValue: String,
-    val category: HealthCategory
+    val category: HealthCategory,
+    val date: String = ""
 )
 
 data class AiGeneratedInsight(
@@ -141,6 +153,6 @@ data class AiGeneratedInsight(
     val metricType: MetricType? = null, // null means whole day summary
     val explanationText: String,
     val practicalTip: String,
-    val disclaimer: String = "Bu bilgiler tıbbi tavsiye yerine geçmez, endişelerin varsa doktoruna danış.",
+    val disclaimer: String = "Bu analizler tıbbi tavsiye yerine geçmez. Olağandışı durumlarda doktorunuza danışınız.",
     val criticalMedicalWarning: String? = null
 )

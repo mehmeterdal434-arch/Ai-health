@@ -4,31 +4,49 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.health.ai.GeminiExplainer
-import com.example.health.data.HealthConnectAvailability
-import com.example.health.data.HealthConnectManager
-import com.example.health.data.HealthDataRepository
-import com.example.health.data.HealthPermissionState
+import com.example.health.data.*
 import com.example.health.data.local.AppDatabase
 import com.example.health.engine.RuleEngine
 import com.example.health.engine.UserHealthProfile
 import com.example.health.model.*
+import com.example.ui.theme.AppThemeMode
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+import java.util.*
+
+enum class DateFilterMode(val title: String) {
+    TODAY("Bugün"),
+    YESTERDAY("Dün"),
+    DAYS_7("Son 7 Gün"),
+    DAYS_30("Son 30 Gün")
+}
+
+data class UserFeedbackMessage(
+    val message: String,
+    val isError: Boolean = false,
+    val id: Long = System.currentTimeMillis()
+)
 
 data class HealthUiState(
     val currentRecord: DailyHealthRecord? = null,
     val summary: StructuredHealthSummary? = null,
     val profile: UserHealthProfile = UserHealthProfile(),
+    val themeMode: AppThemeMode = AppThemeMode.SYSTEM,
+    val selectedDate: String = "",
+    val selectedFilterMode: DateFilterMode = DateFilterMode.TODAY,
     val isAiGenerating: Boolean = false,
     val isSyncing: Boolean = false,
     val lastSyncTime: String = "Henüz eşitlenmedi",
+    val syncSuccessMessage: String? = null,
     val syncErrorMessage: String? = null,
     val fullDayAiInsight: AiGeneratedInsight? = null,
     val metricAiInsights: Map<MetricType, AiGeneratedInsight> = emptyMap(),
     val historicalTrend: List<HistoricalTrendPoint> = emptyList(),
+    val trendDaysCount: Int = 7,
     val selectedMetricForDetail: MetricType = MetricType.STEPS,
     val healthConnectAvailability: HealthConnectAvailability = HealthConnectAvailability.INSTALLED,
     val permissionState: HealthPermissionState = HealthPermissionState(),
@@ -44,80 +62,198 @@ data class HealthUiState(
         )
     ),
     val isChatGenerating: Boolean = false,
-    val isBreathingSheetOpen: Boolean = false
+    val isBreathingSheetOpen: Boolean = false,
+    val userFeedback: UserFeedbackMessage? = null
 )
 
 class HealthViewModel(application: Application) : AndroidViewModel(application) {
 
     private val db = AppDatabase.getDatabase(application)
+    val preferences = AppPreferences(application)
     val healthConnectManager = HealthConnectManager(application)
     val repository = HealthDataRepository(db.healthDao(), healthConnectManager)
     val geminiExplainer = GeminiExplainer(application)
 
     private val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
+    private val isoDateFormatter = DateTimeFormatter.ISO_LOCAL_DATE
 
-    private val _uiState = MutableStateFlow(HealthUiState())
+    private var trendJob: Job? = null
+    private var syncJob: Job? = null
+    private var aiInsightJob: Job? = null
+    private var metricAiJob: Job? = null
+    private var chatJob: Job? = null
+    private var dateJob: Job? = null
+
+    private val _uiState = MutableStateFlow(
+        HealthUiState(
+            themeMode = preferences.loadThemeMode(),
+            profile = preferences.loadProfile(),
+            selectedDate = LocalDate.now().format(isoDateFormatter)
+        )
+    )
     val uiState: StateFlow<HealthUiState> = _uiState.asStateFlow()
 
     init {
         loadInitialData()
     }
 
-    fun loadInitialData() {
+    private fun loadInitialData() {
         viewModelScope.launch {
-            // Check health connect availability & permissions
-            val availability = healthConnectManager.checkHealthConnectAvailability()
-            val isSamsungInstalled = healthConnectManager.isSamsungHealthInstalled()
-            val permState = healthConnectManager.getPermissionState()
-            val currentApiKey = geminiExplainer.getEffectiveApiKey()
-
-            _uiState.update {
-                it.copy(
-                    healthConnectAvailability = availability,
-                    isSamsungHealthInstalled = isSamsungInstalled,
-                    permissionState = permState,
-                    customApiKey = currentApiKey
-                )
-            }
-
-            // Sync or Load today's record
-            syncHealthData()
-        }
-    }
-
-    fun syncHealthData() {
-        viewModelScope.launch {
-            _uiState.update { it.copy(isSyncing = true, syncErrorMessage = null) }
             try {
-                // Refresh permission status
+                val availability = healthConnectManager.checkHealthConnectAvailability()
+                val isSamsungInstalled = healthConnectManager.isSamsungHealthInstalled()
                 val permState = healthConnectManager.getPermissionState()
-                
-                // Fetch real data
-                val record = repository.syncWithHealthConnect(_uiState.value.profile) ?: repository.getTodayRecord()
-                val summary = RuleEngine.evaluateAll(record, _uiState.value.profile)
-                val syncTime = timeFormat.format(Date())
+                val currentApiKey = preferences.getCustomApiKey()
+                val savedProfile = preferences.loadProfile()
+                val savedTheme = preferences.loadThemeMode()
 
                 _uiState.update {
                     it.copy(
-                        currentRecord = record,
-                        summary = summary,
+                        healthConnectAvailability = availability,
+                        isSamsungHealthInstalled = isSamsungInstalled,
                         permissionState = permState,
-                        isSyncing = false,
-                        lastSyncTime = syncTime
+                        customApiKey = currentApiKey,
+                        profile = savedProfile,
+                        waterGoalMl = savedProfile.waterGoalMl,
+                        themeMode = savedTheme
                     )
                 }
 
-                // Refresh trend for active metric
-                loadTrendForMetric(_uiState.value.selectedMetricForDetail)
+                // Initial data load and sync
+                syncHealthData()
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        userFeedback = UserFeedbackMessage(
+                            message = "Başlangıç verileri yüklenirken bir sorun oluştu",
+                            isError = true
+                        )
+                    )
+                }
+            }
+        }
+    }
 
-                // Generate AI insight based on real live data
-                generateFullDayAiInsight(summary, forceRefresh = false)
+    fun setThemeMode(mode: AppThemeMode) {
+        preferences.setThemeMode(mode)
+        _uiState.update {
+            it.copy(
+                themeMode = mode,
+                userFeedback = UserFeedbackMessage(message = "Tema değiştirildi: ${mode.title}")
+            )
+        }
+    }
+
+    fun syncHealthData(isManualTrigger: Boolean = false) {
+        if (_uiState.value.isSyncing) return
+        syncJob?.cancel()
+        syncJob = viewModelScope.launch {
+            _uiState.update { it.copy(isSyncing = true, syncErrorMessage = null, syncSuccessMessage = null) }
+            try {
+                val result = repository.syncWithHealthConnect(_uiState.value.profile)
+                val permState = healthConnectManager.getPermissionState()
+                val syncTime = timeFormat.format(Date())
+
+                when (result) {
+                    is SyncState.Success -> {
+                        val todayRecord = repository.getTodayRecord(_uiState.value.profile)
+                        val summary = RuleEngine.evaluateAll(todayRecord, _uiState.value.profile)
+                        _uiState.update {
+                            it.copy(
+                                currentRecord = todayRecord,
+                                summary = summary,
+                                permissionState = permState,
+                                isSyncing = false,
+                                lastSyncTime = syncTime,
+                                syncSuccessMessage = "✓ Veriler Samsung Health ile eşitlendi",
+                                userFeedback = if (isManualTrigger) UserFeedbackMessage(message = "✓ Sağlık verileri güncellendi") else null
+                            )
+                        }
+                        loadTrendForMetric(_uiState.value.selectedMetricForDetail, _uiState.value.trendDaysCount)
+                        generateFullDayAiInsight(summary, forceRefresh = false)
+                    }
+                    is SyncState.Error -> {
+                        // Fallback to local DB record
+                        val localRecord = repository.getTodayRecord(_uiState.value.profile)
+                        val summary = RuleEngine.evaluateAll(localRecord, _uiState.value.profile)
+                        _uiState.update {
+                            it.copy(
+                                currentRecord = localRecord,
+                                summary = summary,
+                                permissionState = permState,
+                                isSyncing = false,
+                                syncErrorMessage = result.message,
+                                userFeedback = if (isManualTrigger) UserFeedbackMessage(message = result.message, isError = true) else null
+                            )
+                        }
+                        loadTrendForMetric(_uiState.value.selectedMetricForDetail, _uiState.value.trendDaysCount)
+                    }
+                    else -> {
+                        _uiState.update { it.copy(isSyncing = false) }
+                    }
+                }
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(
                         isSyncing = false,
-                        syncErrorMessage = "Senkronizasyon hatası: ${e.localizedMessage}"
+                        syncErrorMessage = "Eşitleme sırasında bir hata oluştu",
+                        userFeedback = if (isManualTrigger) UserFeedbackMessage(message = "Eşitleme hatası", isError = true) else null
                     )
+                }
+            }
+        }
+    }
+
+    fun setDateFilter(mode: DateFilterMode) {
+        val targetDate = when (mode) {
+            DateFilterMode.TODAY -> LocalDate.now()
+            DateFilterMode.YESTERDAY -> LocalDate.now().minusDays(1)
+            DateFilterMode.DAYS_7, DateFilterMode.DAYS_30 -> LocalDate.now()
+        }
+        val targetDateStr = targetDate.format(isoDateFormatter)
+        val days = if (mode == DateFilterMode.DAYS_30) 30 else 7
+
+        dateJob?.cancel()
+        dateJob = viewModelScope.launch {
+            try {
+                val record = repository.getRecordForDate(targetDateStr, _uiState.value.profile)
+                val summary = RuleEngine.evaluateAll(record, _uiState.value.profile)
+
+                _uiState.update {
+                    it.copy(
+                        selectedFilterMode = mode,
+                        selectedDate = targetDateStr,
+                        currentRecord = record,
+                        summary = summary,
+                        trendDaysCount = days
+                    )
+                }
+                loadTrendForMetric(_uiState.value.selectedMetricForDetail, days)
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(userFeedback = UserFeedbackMessage("Tarih verisi yüklenemedi", isError = true))
+                }
+            }
+        }
+    }
+
+    fun selectDate(dateStr: String) {
+        dateJob?.cancel()
+        dateJob = viewModelScope.launch {
+            try {
+                val record = repository.getRecordForDate(dateStr, _uiState.value.profile)
+                val summary = RuleEngine.evaluateAll(record, _uiState.value.profile)
+                _uiState.update {
+                    it.copy(
+                        selectedDate = dateStr,
+                        currentRecord = record,
+                        summary = summary
+                    )
+                }
+                loadTrendForMetric(_uiState.value.selectedMetricForDetail, _uiState.value.trendDaysCount)
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(userFeedback = UserFeedbackMessage("Seçilen günün verisi yüklenemedi", isError = true))
                 }
             }
         }
@@ -133,14 +269,18 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
 
     fun addWater(amountMl: Int) {
         _uiState.update {
-            val newAmount = (it.waterIntakeMl + amountMl).coerceIn(0, 6000)
+            val newAmount = (it.waterIntakeMl + amountMl).coerceIn(0, 8000)
             it.copy(waterIntakeMl = newAmount)
         }
     }
 
+    fun resetWater() {
+        _uiState.update { it.copy(waterIntakeMl = 0) }
+    }
+
     fun sendChatMessage(userText: String) {
         val trimmed = userText.trim()
-        if (trimmed.isBlank()) return
+        if (trimmed.isBlank() || _uiState.value.isChatGenerating) return
 
         val userMessage = ChatMessage(text = trimmed, isUser = true)
         val currentList = _uiState.value.chatMessages + userMessage
@@ -151,20 +291,41 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
             )
         }
 
-        viewModelScope.launch {
-            val summary = _uiState.value.summary ?: return@launch
-            val responseText = geminiExplainer.chatWithHealthCoach(
-                userMessage = trimmed,
-                summary = summary,
-                conversationHistory = currentList
-            )
-
-            val aiMessage = ChatMessage(text = responseText, isUser = false)
-            _uiState.update {
-                it.copy(
-                    chatMessages = it.chatMessages + aiMessage,
-                    isChatGenerating = false
+        chatJob?.cancel()
+        chatJob = viewModelScope.launch {
+            try {
+                val summary = _uiState.value.summary ?: RuleEngine.evaluateAll(
+                    DailyHealthRecord(
+                        date = LocalDate.now().format(isoDateFormatter),
+                        timestamp = System.currentTimeMillis()
+                    ),
+                    _uiState.value.profile
                 )
+
+                val responseText = geminiExplainer.chatWithHealthCoach(
+                    userMessage = trimmed,
+                    summary = summary,
+                    conversationHistory = currentList
+                )
+
+                val aiMessage = ChatMessage(text = responseText, isUser = false)
+                _uiState.update {
+                    it.copy(
+                        chatMessages = it.chatMessages + aiMessage,
+                        isChatGenerating = false
+                    )
+                }
+            } catch (e: Exception) {
+                val fallbackMsg = ChatMessage(
+                    text = "Yanıt üretilirken bir sorun oluştu. Lütfen tekrar deneyin.",
+                    isUser = false
+                )
+                _uiState.update {
+                    it.copy(
+                        chatMessages = it.chatMessages + fallbackMsg,
+                        isChatGenerating = false
+                    )
+                }
             }
         }
     }
@@ -174,19 +335,20 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
         val aiInsight = _uiState.value.fullDayAiInsight
 
         return buildString {
-            appendLine("📋 SAMSUNG HEALTH & AI KLİNİK ÖZET RAPORU")
+            appendLine("📋 SAMSUNG HEALTH & AI KLİNİK SAĞLIK RAPORU")
             appendLine("📅 Tarih: ${summary.date}")
             appendLine("🔄 Son Senkronizasyon: ${_uiState.value.lastSyncTime}")
-            appendLine("📊 Genel Hazırlık Skoru: %${summary.overallScore} (${summary.overallStatus.tag})")
+            appendLine("📊 Günlük Hazırlık Skoru: %${summary.overallScore} (${summary.overallStatus.tag})")
             appendLine("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-            appendLine("📈 GÜNCEL METRİK DETAYLARI (Canlı Veri):")
+            appendLine("📈 BİYOMETRİK ÖLÇÜMLER:")
             summary.evaluations.forEach { (type, eval) ->
-                appendLine("• ${type.displayName}: ${eval.formattedValue}")
+                val valStr = if (eval.hasMeasuredData) eval.formattedValue else "Ölçüm Yok"
+                appendLine("• ${type.displayName}: $valStr")
                 appendLine("  Durum: ${eval.category.label} (${eval.statusLevel.tag}) | Ref: ${eval.normalRange}")
             }
             appendLine("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
             if (aiInsight != null) {
-                appendLine("🤖 AI SAĞLIK ASİSTANI SENTEZİ:")
+                appendLine("🤖 AI SAĞLIK ASİSTANI ANALİZİ:")
                 appendLine(aiInsight.explanationText)
                 appendLine("\n💡 TAVSİYE: ${aiInsight.practicalTip}")
             }
@@ -202,28 +364,43 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
                 activeTab = 1 // Switch to Detail screen
             )
         }
-        loadTrendForMetric(metricType)
+        loadTrendForMetric(metricType, _uiState.value.trendDaysCount)
         generateMetricAiInsight(metricType, forceRefresh = false)
     }
 
-    private fun loadTrendForMetric(metricType: MetricType) {
-        viewModelScope.launch {
-            repository.getHistoricalTrend(metricType).collectLatest { trendList ->
-                _uiState.update { it.copy(historicalTrend = trendList) }
+    fun setTrendDaysCount(days: Int) {
+        _uiState.update { it.copy(trendDaysCount = days) }
+        loadTrendForMetric(_uiState.value.selectedMetricForDetail, days)
+    }
+
+    private fun loadTrendForMetric(metricType: MetricType, days: Int = 7) {
+        trendJob?.cancel()
+        trendJob = viewModelScope.launch {
+            try {
+                repository.getHistoricalTrend(metricType, days).collectLatest { trendList ->
+                    _uiState.update { it.copy(historicalTrend = trendList) }
+                }
+            } catch (e: Exception) {
+                // If query is cancelled or fails, silently keep current or empty list
             }
         }
     }
 
     fun generateFullDayAiInsight(summary: StructuredHealthSummary, forceRefresh: Boolean = true) {
-        viewModelScope.launch {
-            _uiState.update { it.copy(isAiGenerating = true) }
-            val insight = geminiExplainer.explainFullDay(summary)
-            repository.saveAiInsight(insight)
-            _uiState.update {
-                it.copy(
-                    fullDayAiInsight = insight,
-                    isAiGenerating = false
-                )
+        aiInsightJob?.cancel()
+        aiInsightJob = viewModelScope.launch {
+            try {
+                _uiState.update { it.copy(isAiGenerating = true) }
+                val insight = geminiExplainer.explainFullDay(summary)
+                repository.saveAiInsight(insight)
+                _uiState.update {
+                    it.copy(
+                        fullDayAiInsight = insight,
+                        isAiGenerating = false
+                    )
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(isAiGenerating = false) }
             }
         }
     }
@@ -232,39 +409,97 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
         val currentSummary = _uiState.value.summary ?: return
         val eval = currentSummary.evaluations[metricType] ?: return
 
-        viewModelScope.launch {
-            val insight = geminiExplainer.explainMetric(eval, currentSummary.date)
-            repository.saveAiInsight(insight)
-            _uiState.update { state ->
-                val newMap = state.metricAiInsights.toMutableMap()
-                newMap[metricType] = insight
-                state.copy(metricAiInsights = newMap)
+        metricAiJob?.cancel()
+        metricAiJob = viewModelScope.launch {
+            try {
+                val insight = geminiExplainer.explainMetric(eval, currentSummary.date)
+                repository.saveAiInsight(insight)
+                _uiState.update { state ->
+                    val newMap = state.metricAiInsights.toMutableMap()
+                    newMap[metricType] = insight
+                    state.copy(metricAiInsights = newMap)
+                }
+            } catch (e: Exception) {
+                // Fallback handled inside GeminiExplainer
             }
         }
     }
 
     fun updateProfile(profile: UserHealthProfile) {
+        preferences.saveProfile(profile)
         viewModelScope.launch {
-            _uiState.update { it.copy(profile = profile) }
-            val record = _uiState.value.currentRecord ?: return@launch
-            val summary = RuleEngine.evaluateAll(record, profile)
-            _uiState.update { it.copy(summary = summary) }
-            repository.saveRecord(record, profile)
+            try {
+                _uiState.update { it.copy(profile = profile, waterGoalMl = profile.waterGoalMl) }
+                val record = _uiState.value.currentRecord ?: return@launch
+                val summary = RuleEngine.evaluateAll(record, profile)
+                _uiState.update {
+                    it.copy(
+                        summary = summary,
+                        userFeedback = UserFeedbackMessage(message = "Hedefler başarıyla kaydedildi")
+                    )
+                }
+                repository.saveRecord(record, profile)
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(userFeedback = UserFeedbackMessage("Hedefler kaydedilirken hata oluştu", isError = true))
+                }
+            }
         }
     }
 
     fun updateCustomApiKey(key: String) {
+        preferences.saveCustomApiKey(key)
         geminiExplainer.saveCustomApiKey(key)
-        _uiState.update { it.copy(customApiKey = key) }
+        _uiState.update {
+            it.copy(
+                customApiKey = key,
+                userFeedback = UserFeedbackMessage(message = "Gemini API Anahtarı güncellendi")
+            )
+        }
     }
 
     fun refreshPermissionsState() {
         viewModelScope.launch {
-            val permState = healthConnectManager.getPermissionState()
-            _uiState.update { it.copy(permissionState = permState) }
-            if (permState.anyGranted) {
-                syncHealthData()
+            try {
+                val permState = healthConnectManager.getPermissionState()
+                _uiState.update { it.copy(permissionState = permState) }
+                if (permState.anyGranted) {
+                    syncHealthData()
+                }
+            } catch (e: Exception) {
+                // Ignore permission refresh error
             }
         }
+    }
+
+    fun clearLocalData() {
+        viewModelScope.launch {
+            try {
+                repository.clearAllLocalCache()
+                val blankRecord = DailyHealthRecord(
+                    date = LocalDate.now().format(isoDateFormatter),
+                    timestamp = System.currentTimeMillis()
+                )
+                val summary = RuleEngine.evaluateAll(blankRecord, _uiState.value.profile)
+                _uiState.update {
+                    it.copy(
+                        currentRecord = blankRecord,
+                        summary = summary,
+                        fullDayAiInsight = null,
+                        metricAiInsights = emptyMap(),
+                        historicalTrend = emptyList(),
+                        userFeedback = UserFeedbackMessage(message = "Uygulama yerel verileri başarıyla temizlendi")
+                    )
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(userFeedback = UserFeedbackMessage("Temizleme sırasında bir hata oluştu", isError = true))
+                }
+            }
+        }
+    }
+
+    fun dismissFeedback() {
+        _uiState.update { it.copy(userFeedback = null) }
     }
 }
